@@ -18,9 +18,35 @@ def post(path, payload):
         raise RuntimeError(f"OZON API error {r.status_code} {path}: {body}")
     return r.json()
 
+def _stocks_page(skus_chunk, cursor=None, limit=100):
+    payload = {"skus": skus_chunk, "limit": limit}  # <-- ВАЖНО: skus (мн. число)
+    if cursor:
+        payload["cursor"] = cursor
+    return post("/v1/analytics/stocks", payload)
+
 def get_stocks(skus: list[int]):
-    # новый FBO-метод
-    return post("/v1/analytics/stocks", {"sku": skus})
+    """
+    Возвращает единый словарь {"items":[...], "total":N}
+    Делим запрос на чанки по 100 SKU, как требует API.
+    """
+    skus = [int(x) for x in (skus or []) if x is not None]
+    if not skus:
+        raise RuntimeError("Нет SKU для запроса остатков (список пуст).")
+
+    all_items = []
+    # пачкуем по 100
+    for i in range(0, len(skus), 100):
+        chunk = skus[i:i+100]
+        cursor = None
+        while True:
+            page = _stocks_page(chunk, cursor=cursor, limit=100)
+            items = page.get("items") or []
+            all_items.extend(items)
+            cursor = page.get("cursor")
+            if not cursor or not items:
+                break
+
+    return {"items": all_items, "total": len(all_items)}
 
 def get_warehouses():
     # список складов для авто-матчинга ID↔имя
