@@ -5,7 +5,59 @@ import json
 import time
 import re
 from typing import Dict, List, Optional
+from collections import defaultdict
 from core.warehouses_map import WAREHOUSE_NAME_TO_CLUSTER
+
+# Кластеры стран СНГ — считаем «нелокальными» и пропускаем (по твоему правилу)
+NON_LOCAL_CLUSTERS = {"Казахстан", "Беларусь", "Армения"}
+# Соответствия названий кластеров из API → названия как в твоём Excel
+API_CLUSTER_TO_OUR = {
+    "МОСКВАМОИДАЛЬНИЕРЕГИОНЫ": "Москва, МО и Дальние регионы",
+    "САНКТПЕТЕРБУРГИСЗО": "Санкт-Петербург и СЗО",
+    "КАЗАНЬ": "Казань и Поволжье",
+    "УФА": "Уфа",
+    "ЮГ": "Краснодар и Юг",
+    "УРАЛ": "Екатеринбург и Урал",
+    "СИБИРЬ": "Новосибирск и Сибирь",
+    "ДАЛЬНИЙВОСТОК": "Дальний Восток",
+    "САРАТОВ": "Саратов",
+    "КАВКАЗ": "Кавказ",
+    "КАЛИНИНГРАД": "Калининград",
+    "ВОРОНЕЖ": "Воронеж",
+    "ЯРОСЛАВЛЬ": "Ярославль",
+    "САМАРА": "Самара",
+}
+
+def _norm(s: str) -> str:
+    s = (s or "").upper()
+    s = s.replace("РФЦ", "").replace("RFC", "")
+    return re.sub(r"[^А-ЯA-Z0-9]", "", s)
+
+def _map_cluster(api_cluster: str, wh_name: str) -> str | None:
+    """1) пробуем по имени кластера из API; 2) по имени склада из Excel; 3) иначе возвращаем API-кластер как есть."""
+    if api_cluster:
+        if api_cluster in NON_LOCAL_CLUSTERS:
+            return None  # отбрасываем нелокальные страны
+        norm = _norm(api_cluster)
+        if norm in API_CLUSTER_TO_OUR:
+            return API_CLUSTER_TO_OUR[norm]
+        # прямое совпадение с Excel-именем
+        for excel_cluster in set(WAREHOUSE_NAME_TO_CLUSTER.values()):
+            if _norm(excel_cluster) == norm:
+                return excel_cluster
+
+    if wh_name:
+        # точное имя склада из Excel
+        if wh_name in WAREHOUSE_NAME_TO_CLUSTER:
+            return WAREHOUSE_NAME_TO_CLUSTER[wh_name]
+        # нормализованное совпадение имени склада
+        wnorm = _norm(wh_name)
+        for wh, cl in WAREHOUSE_NAME_TO_CLUSTER.items():
+            if _norm(wh) == wnorm:
+                return cl
+
+    # ничего не нашли — используем API-кластер как есть (если он не нелокальный)
+    return None if api_cluster in NON_LOCAL_CLUSTERS else (api_cluster or None)
 
 # Рантайм-словарь ID→кластер (заполняется из кэша/из API)
 WAREHOUSE_ID_TO_CLUSTER: Dict[int, str] = {}
@@ -150,43 +202,29 @@ def _qty_present(stock_rec: dict) -> int:
         return 0
 
 
-def aggregate_by_cluster(stocks_resp: dict) -> dict[int, dict[str, int]]:
+def aggregate_by_cluster(resp: dict) -> dict[int, dict[str, int]]:
     """
-    Формат /v1/analytics/stocks:
-    {
-      "items":[
-        {
-          "offer_id":"...",
-          "product_id":...,
-          "stocks":[
-            {"present":10, "reserved":1, "sku":123, "warehouse_ids":[112..., 112...]},
-            ...
-          ]
-        }
-      ],
-      "total": ...
-    }
-    → Возвращаем: { sku: { cluster: qty, ... }, ... }
+    Новый ответ /v1/analytics/stocks:
+      items: [ { sku, cluster_name, warehouse_name, available_stock_count, ... }, ... ]
+    Возвращает: { sku: { cluster: total_available, ... }, ... }
     """
-    out = {}
-    buckets = defaultdict(list)
+    buckets = defaultdict(lambda: defaultdict(int))
+    for it in (resp.get("items") or []):
+        try:
+            sku = int(it.get("sku"))
+        except Exception:
+            continue
 
-    for it in (stocks_resp.get("items") or []):
-        for s in (it.get("stocks") or []):
-            try:
-                sku = int(s.get("sku"))
-                buckets[sku].append(s)
-            except Exception:
-                continue
+        qty = int(it.get("available_stock_count") or 0)
+        if qty <= 0:
+            continue
 
-    for sku, recs in buckets.items():
-        cmap = defaultdict(int)
-        for rec in recs:
-            qty = _qty_present(rec)
-            for wh_id in (rec.get("warehouse_ids") or []):
-                cluster = _cluster_by_id(wh_id)
-                if cluster:
-                    cmap[cluster] += qty
-        out[sku] = dict(cmap)
+        api_cluster = it.get("cluster_name") or ""
+        wh_name = it.get("warehouse_name") or ""
+        cluster = _map_cluster(api_cluster, wh_name)
+        if not cluster:
+            continue  # либо нелокальная страна, либо не смогли сматчить
 
-    return out
+        buckets[sku][cluster] += qty
+
+    return {sku: dict(cmap) for sku, cmap in buckets.items()}
