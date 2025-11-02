@@ -1,12 +1,10 @@
 import os
 from core.logger import setup_logger
 from core.rules import load_rules
-from core.ozon_api import get_stocks
-from core.stocks import aggregate_by_cluster
 from core.decide import clusters_on_for_sku, clusters_for_group, discount_for_group
 from core.promo_ui import upsert_promo
-
-log = setup_logger()
+from core.ozon_api import get_stocks, get_warehouses
+from core.stocks import aggregate_by_cluster, ensure_id_map
 
 def main():
     rules = load_rules()
@@ -18,8 +16,14 @@ def main():
     if not all_skus:
         log.warning("В promo_groups нет SKU."); return
 
+    # обеспечиваем ID→кластер (из кэша или разово из API)
+    matched = ensure_id_map(get_warehouses, force=False)
+    log.info(f"ID→кластер: сопоставлено {matched} складов (кэш {'OK' if matched else 'empty'})")
+
     stocks = get_stocks(all_skus)
     agg = aggregate_by_cluster(stocks)
+
+    # дальше как было...
 
     sku_clusters_on = {sku: clusters_on_for_sku(sku, agg.get(sku, {}), rules) for sku in all_skus}
 
