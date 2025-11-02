@@ -48,13 +48,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 @admin_only
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def status(update, context):
     rules = load_rules()
     groups = rules.get("promo_groups", {})
     all_skus = sorted({int(s) for g in groups.values() for s in g.get("skus", [])})
     if not all_skus:
         await update.message.reply_text("В promo_groups нет SKU."); return
-    stocks = get_stocks(all_skus)
+
+    # загрузим кэш или один раз подтянем список складов
+    matched = ensure_id_map(get_warehouses, force=False)
+
+    try:
+        stocks = get_stocks(all_skus)
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка Ozon API при получении остатков:\n{e}")
+        return
+
     agg = aggregate_by_cluster(stocks)
     sku_clusters_on = {sku: clusters_on_for_sku(sku, agg.get(sku, {}), rules) for sku in all_skus}
 
@@ -64,6 +73,11 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         disc = discount_for_group(g, rules)
         lines.append(f"{name}: mode={g.get('group_city_mode','union')} disc={disc}% skus={g.get('skus', [])} clusters={sorted(gcls)}")
     await update.message.reply_text("Статус групп:\n" + "\n".join(lines)[:4000])
+
+@admin_only
+async def refresh_warehouses(update, context):
+    matched = ensure_id_map(get_warehouses, force=True)
+    await update.message.reply_text(f"Обновил список складов. Сопоставлено: {matched}")
 
 @admin_only
 async def run(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -198,6 +212,7 @@ def main():
     app.add_handler(CommandHandler("set_qmin", set_qmin))
     app.add_handler(CommandHandler("enable", enable))
     app.add_handler(CommandHandler("disable", disable))
+    app.add_handler(CommandHandler("refresh_warehouses", refresh_warehouses))
 
     webhook_url = os.getenv("WEBHOOK_URL", "").strip()
     if webhook_url:
