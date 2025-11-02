@@ -206,6 +206,42 @@ async def dump_warehouses(update, context):
         lines = ["(пусто)"]
     await update.message.reply_text("Примеры складов из Ozon:\n" + "\n".join(lines))
 
+@admin_only
+async def debug_stocks(update, context):
+    from core.ozon_api import get_stocks
+    from core.stocks import aggregate_by_cluster, ensure_id_map, WAREHOUSE_ID_TO_CLUSTER
+    from core.ozon_api import get_warehouses
+
+    # обеспечиваем кэш складов
+    ensure_id_map(get_warehouses, force=False)
+
+    # возьмем все SKU из rules.yaml
+    from core.rules import load_rules
+    rules = load_rules()
+    groups = rules.get("promo_groups", {})
+    all_skus = sorted({int(s) for g in groups.values() for s in g.get("skus", [])})
+    if not all_skus:
+        await update.message.reply_text("В rules.yaml нет SKU.")
+        return
+
+    try:
+        resp = get_stocks(all_skus)
+    except Exception as e:
+        await update.message.reply_text(f"Ozon API error: {e}")
+        return
+
+    # покажем первые 5 записей
+    items = resp.get("items") or []
+    if not items:
+        await update.message.reply_text("API вернул пустой список items — возможно, товары без остатков на FBO.")
+        return
+
+    sample = []
+    for it in items[:5]:
+        for st in (it.get("stocks") or [])[:3]:
+            sample.append(f"sku={st.get('sku')} present={st.get('present')} warehouses={st.get('warehouse_ids')}")
+    await update.message.reply_text("\n".join(sample))
+
 def main():
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     app = Application.builder().token(token).build()
@@ -225,6 +261,7 @@ def main():
     app.add_handler(CommandHandler("disable", disable))
     app.add_handler(CommandHandler("refresh_warehouses", refresh_warehouses))
     app.add_handler(CommandHandler("dump_warehouses", dump_warehouses))
+    app.add_handler(CommandHandler("debug_stocks", debug_stocks))
 
     webhook_url = os.getenv("WEBHOOK_URL", "").strip()
     if webhook_url:
