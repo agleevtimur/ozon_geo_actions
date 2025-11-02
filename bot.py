@@ -9,6 +9,7 @@ from core.logger import setup_logger
 from core.rules import load_rules, save_rules
 from core.ozon_api import get_stocks, get_warehouses
 from core.stocks import aggregate_by_cluster, ensure_id_map
+from core.decide import clusters_on_for_sku, clusters_for_group, discount_for_group
 from run_once import main as run_pipeline
 
 load_dotenv()
