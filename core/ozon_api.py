@@ -66,7 +66,8 @@ def get_warehouses():
     }
     """
     payload = {"cluster_type": "CLUSTER_TYPE_OZON"}
-    resp = post("/v1/cluster/list", payload)    clusters = resp.get("clusters") or []
+    resp = post("/v1/cluster/list", payload)
+    clusters = resp.get("clusters") or []
     out = []
     for c in clusters:
       # интересуют только склады Озона
