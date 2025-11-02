@@ -39,7 +39,7 @@ def find_or_create_promo(page, promo_name):
     if page.locator(f"text={promo_name}").count() > 0:
         page.locator(f"text={promo_name}").first.click(); page.wait_for_load_state("networkidle"); return "edit"
     page.get_by_role("button", name="Создать акцию").click(); page.wait_for_load_state("networkidle")
-    try: page.fill('input[name=\"promoName\"]', promo_name)
+    try: page.fill('input[name="promoName"]', promo_name)
     except: page.get_by_placeholder("Название").fill(promo_name)
     return "create"
 
@@ -59,33 +59,33 @@ def set_cities(page, cities: list[str]):
 
 def set_discount(page, percent: int):
     page.get_by_text("Размер скидки", exact=False).click()
-    fld = page.locator('input[name=\"discount\"]'); 
-    if not fld.count(): fld = page.get_by_placeholder(\"%\")
+    fld = page.locator('input[name="discount"]'); 
+    if not fld.count(): fld = page.get_by_placeholder("%")
     fld.fill(str(percent))
-    try: page.get_by_role(\"button\", name=\"Сохранить\").click()
+    try: page.get_by_role("button", name="Сохранить").click()
     except: pass
 
 def set_products(page, offer_ids: list[str]):
-    page.get_by_text(\"Товары\", exact=False).click()
+    page.get_by_text("Товары", exact=False).click()
     try:
-        if page.get_by_role(\"button\", name=\"Снять все\").is_visible():
-            page.get_by_role(\"button\", name=\"Снять все\").click()
+        if page.get_by_role("button", name="Снять все").is_visible():
+            page.get_by_role("button", name="Снять все").click()
     except: pass
     for oid in offer_ids:
         try:
-            page.fill('input[placeholder=\"Поиск товара\"]', oid); page.wait_for_timeout(250)
-            page.get_by_role(\"checkbox\", name=oid, exact=False).check()
+            page.fill('input[placeholder="Поиск товара"]', oid); page.wait_for_timeout(250)
+            page.get_by_role("checkbox", name=oid, exact=False).check()
         except: pass
-    try: page.get_by_role(\"button\", name=\"Сохранить\").click()
+    try: page.get_by_role("button", name="Сохранить").click()
     except: pass
 
 def save_promo(page):
-    try: page.get_by_role(\"button\", name=\"Запустить продвижение\").click()
+    try: page.get_by_role("button", name="Запустить продвижение").click()
     except:
-        try: page.get_by_role(\"button\", name=\"Сохранить\").click()
+        try: page.get_by_role("button", name="Сохранить").click()
         except: pass
 
-def upsert_promo(group_name: str, cities: list[str], discount: int, offer_ids: list[str], cookies_path=\"cookies.json\", headless=True):
+def upsert_promo(group_name: str, cities: list[str], discount: int, offer_ids: list[str], cookies_path="cookies.json", headless=True):
     with sync_playwright() as pw:
         browser, context, page = ensure_context(pw, cookies_path, headless=headless)
         promo_name = PROMO_NAME_TPL.format(group_name=group_name)
