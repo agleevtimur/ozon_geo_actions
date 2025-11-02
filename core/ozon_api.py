@@ -49,13 +49,37 @@ def get_stocks(skus: list[int]):
     return {"items": all_items, "total": len(all_items)}
 
 def get_warehouses():
-    # список складов для авто-матчинга ID↔имя
-    resp = post("/v1/warehouse/list", {})
-    items = resp.get("result") or resp.get("warehouses") or []
+    """
+    Возвращает список FBO-складов с их ID и именами из /v1/cluster/list.
+    Поддерживает схему:
+    {
+      "clusters":[
+        {
+          "id":...,
+          "name":"...",
+          "type":"CLUSTER_TYPE_OZON",
+          "logistic_clusters":[
+            {"warehouses":[{"warehouse_id":..., "name":"...", "type":"FULL_FILLMENT"}, ...]}
+          ]
+        }
+      ]
+    }
+    """
+    resp = post("/v1/cluster/list", {})
+    clusters = resp.get("clusters") or []
     out = []
-    for w in items:
-        out.append({
-            "warehouse_id": w.get("warehouse_id") or w.get("id"),
-            "name": w.get("name") or w.get("warehouse_name"),
-        })
+    for c in clusters:
+      # интересуют только склады Озона
+      if (c.get("type") or "").upper() != "CLUSTER_TYPE_OZON":
+          continue
+      c_name = c.get("name")
+      for lc in c.get("logistic_clusters", []) or []:
+          for w in lc.get("warehouses", []) or []:
+              if (w.get("type") or "").upper() != "FULL_FILLMENT":
+                  continue
+              out.append({
+                  "warehouse_id": w.get("warehouse_id"),
+                  "name": w.get("name"),
+                  "cluster_name_from_api": c_name,  # на всякий случай сохраняем
+              })
     return out
