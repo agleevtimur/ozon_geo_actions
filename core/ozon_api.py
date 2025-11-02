@@ -50,37 +50,27 @@ def get_stocks(skus: list[int]):
 
 def get_warehouses():
     """
-    Возвращает список FBO-складов с их ID и именами из /v1/cluster/list.
-    Поддерживает схему:
-    {
-      "clusters":[
-        {
-          "id":...,
-          "name":"...",
-          "type":"CLUSTER_TYPE_OZON",
-          "logistic_clusters":[
-            {"warehouses":[{"warehouse_id":..., "name":"...", "type":"FULL_FILLMENT"}, ...]}
-          ]
-        }
-      ]
-    }
+    Собирает FBO (FULL_FILLMENT) склады из /v1/cluster/list под фактический ответ:
+    { "clusters":[ { "type":"OZON", "name":"...", "logistic_clusters":[{"warehouses":[...]}] } ] }
     """
-    payload = {"cluster_type": "CLUSTER_TYPE_OZON"}
+    # Параметр не обязателен, но можно оставить:
+    payload = {"cluster_type": "OZON"}
     resp = post("/v1/cluster/list", payload)
+
     clusters = resp.get("clusters") or []
     out = []
+
     for c in clusters:
-      # интересуют только склады Озона
-      if (c.get("type") or "").upper() != "CLUSTER_TYPE_OZON":
-          continue
-      c_name = c.get("name")
-      for lc in c.get("logistic_clusters", []) or []:
-          for w in lc.get("warehouses", []) or []:
-              if (w.get("type") or "").upper() != "FULL_FILLMENT":
-                  continue
-              out.append({
-                  "warehouse_id": w.get("warehouse_id"),
-                  "name": w.get("name"),
-                  "cluster_name_from_api": c_name,  # на всякий случай сохраняем
-              })
+        c_name = c.get("name")  # например: "Кавказ", "Казань", "Москва, МО и Дальние регионы"
+        # тип кластера может быть "OZON" — НЕ отфильтровываем его жёстко
+        for lc in c.get("logistic_clusters", []) or []:
+            for w in lc.get("warehouses", []) or []:
+                w_type = (w.get("type") or "").upper()
+                if w_type != "FULL_FILLMENT":
+                    continue
+                out.append({
+                    "warehouse_id": w.get("warehouse_id"),  # может быть str или int — ок
+                    "name": w.get("name"),                  # например: "НЕВИННОМЫССК_РФЦ"
+                    "cluster_name_from_api": c_name,        # например: "Кавказ"
+                })
     return out
