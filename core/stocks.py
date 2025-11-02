@@ -4,12 +4,7 @@ from pathlib import Path
 import json
 import time
 from typing import Dict, List, Optional
-
-# твой маппинг ИМЯ склада → кластер (уже вшит)
-WAREHOUSE_NAME_TO_CLUSTER: Dict[str, str] = {
-    # "ПУШКИНО_1_РФЦ": "Москва, МО и Дальние регионы",
-    # ...
-}
+from warehouses_map import WAREHOUSE_NAME_TO_CLUSTER
 
 # Рантайм-словарь ID→кластер (заполняется из кэша/из API)
 WAREHOUSE_ID_TO_CLUSTER: Dict[int, str] = {}
@@ -18,7 +13,6 @@ WAREHOUSE_ID_TO_CLUSTER: Dict[int, str] = {}
 CACHE_PATH = Path("warehouse_id_to_cluster.json")
 # Сколько часов считаем кэш «свежим» (по умолчанию ~30 дней)
 CACHE_TTL_HOURS = 24 * 30
-
 
 def _now_ts() -> int:
     return int(time.time())
