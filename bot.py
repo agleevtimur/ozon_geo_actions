@@ -208,14 +208,14 @@ async def dump_warehouses(update, context):
 
 @admin_only
 async def debug_stocks(update, context):
-    from core.ozon_api import get_stocks
-    from core.stocks import aggregate_by_cluster, ensure_id_map, WAREHOUSE_ID_TO_CLUSTER
-    from core.ozon_api import get_warehouses
+    import json
+    from core.ozon_api import get_stocks, get_warehouses
+    from core.stocks import aggregate_by_cluster, ensure_id_map
 
-    # обеспечиваем кэш складов
-    ensure_id_map(get_warehouses, force=False)
+    # 1) Кэш ID→кластер
+    matched = ensure_id_map(get_warehouses, force=False)
 
-    # возьмем все SKU из rules.yaml
+    # 2) Все SKU из правил
     from core.rules import load_rules
     rules = load_rules()
     groups = rules.get("promo_groups", {})
@@ -224,23 +224,55 @@ async def debug_stocks(update, context):
         await update.message.reply_text("В rules.yaml нет SKU.")
         return
 
+    # 3) Запрос к Ozon
     try:
         resp = get_stocks(all_skus)
     except Exception as e:
         await update.message.reply_text(f"Ozon API error: {e}")
         return
 
-    # покажем первые 5 записей
     items = resp.get("items") or []
     if not items:
-        await update.message.reply_text("API вернул пустой список items — возможно, товары без остатков на FBO.")
+        await update.message.reply_text(
+            "API вернул пустой items — вероятно, нет остатков FBO по этим SKU.\n"
+            f"Сопоставлено складов ID→кластер: {matched}"
+        )
         return
 
+    # 4) Соберём примеры строк
     sample = []
-    for it in items[:5]:
-        for st in (it.get("stocks") or [])[:3]:
-            sample.append(f"sku={st.get('sku')} present={st.get('present')} warehouses={st.get('warehouse_ids')}")
-    await update.message.reply_text("\n".join(sample))
+    empty_stocks = 0
+    for it in items[:10]:  # покажем максимум 10 товаров
+        stocks = it.get("stocks") or []
+        if not stocks:
+            empty_stocks += 1
+            # попробуем показать offer_id/product_id, чтобы было понятно что за позиция
+            offer_id = it.get("offer_id")
+            product_id = it.get("product_id")
+            sample.append(f"(no-stocks) offer_id={offer_id} product_id={product_id}")
+            continue
+        for st in stocks[:3]:  # на товар максимум 3 строки
+            sku = st.get("sku")
+            present = st.get("present")
+            whs = st.get("warehouse_ids")
+            sample.append(f"sku={sku} present={present} warehouses={whs}")
+
+    # 5) Если даже после прохода нечего показать — пусть будет понятное сообщение
+    if not sample:
+        # Покажем компактный JSON-фрагмент первых 1-2 items для диагностики
+        preview = json.dumps(items[:2], ensure_ascii=False)[:1000]
+        await update.message.reply_text(
+            "Получены items, но в них нет stocks для показа.\n"
+            f"empty_stocks={empty_stocks}, matched={matched}\n"
+            f"preview: {preview}"
+        )
+        return
+
+    # 6) Отправим собранные примеры
+    text = "Примеры строк из /v1/analytics/stocks:\n" + "\n".join(sample)
+    if len(text) > 3800:
+        text = text[:3800] + "\n… (обрезано)"
+    await update.message.reply_text(text)
 
 def main():
     token = os.getenv("TELEGRAM_BOT_TOKEN")
