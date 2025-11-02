@@ -202,7 +202,7 @@ async def main():
         await app.bot.set_webhook(url=webhook_url, secret_token=os.getenv("WEBHOOK_SECRET",""))
         await app.initialize(); await app.start(); await asyncio.Event().wait()
     else:
-        await app.run_polling(close_loop=False)
+        await app.run_polling()
 
 if __name__ == "__main__":
     asyncio.run(main())
