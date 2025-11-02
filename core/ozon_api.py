@@ -54,7 +54,7 @@ def get_warehouses():
     { "clusters":[ { "type":"OZON", "name":"...", "logistic_clusters":[{"warehouses":[...]}] } ] }
     """
     # Параметр не обязателен, но можно оставить:
-    payload = {"cluster_type": "OZON"}
+    payload = {"cluster_type": "CLUSTER_TYPE_OZON"}
     resp = post("/v1/cluster/list", payload)
 
     clusters = resp.get("clusters") or []
