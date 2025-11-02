@@ -55,34 +55,30 @@ def _cache_is_fresh() -> bool:
         return False
 
 def _normalize(s: str) -> str:
-    """Нормализуем имя: верхний регистр, убираем пробелы/знаки, выкидываем РФЦ/RFC"""
     s = (s or "").upper()
     s = s.replace("РФЦ", "").replace("RFC", "")
-    s = re.sub(r"[^А-ЯA-Z0-9]", "", s)  # только буквы/цифры
+    s = re.sub(r"[^А-ЯA-Z0-9]", "", s)   # убираем всё, кроме букв/цифр
     return s
-
-# Маппинг названий кластеров из API -> твои кластеры (можно оставить пустым и дополнять по /dump_warehouses)
-API_CLUSTER_TO_OUR: dict[str, str] = {
-    # "МОСКВАИМО": "Москва, МО и Дальние регионы",
-    # "САНКТПЕТЕРБУРГИЛЕНОБЛАСТЬ": "Санкт-Петербург и СЗО",
-    # "КАЗАНЬИПОВОЛЖЬЕ": "Казань",
-    # ...
-}
 
 def build_id_map(warehouses: list[dict], persist: bool = True) -> int:
     """
     Создаём ID->кластер:
-    1) пытаемся по имени склада (фаззи-матч),
-    2) если не нашли — по имени кластера из API (через API_CLUSTER_TO_OUR).
+    1) по имени склада (нормализованный ключ),
+    2) если не нашли — по имени кластера из API:
+       ищем Excel-кластер, который содержит это имя (нормализованно).
     """
     global WAREHOUSE_ID_TO_CLUSTER
     WAREHOUSE_ID_TO_CLUSTER.clear()
     matched = 0
 
-    # Нормализуем ключи Excel-маппинга
-    norm_excel = { _normalize(name): cluster for name, cluster in WAREHOUSE_NAME_TO_CLUSTER.items() }
-    # Нормализуем словарь «имя кластера API -> наш кластер»
-    norm_api_cluster = { _normalize(k): v for k, v in API_CLUSTER_TO_OUR.items() }
+    # Нормализуем МАП из Excel: "ИМЯ СКЛАДА" -> "наш кластер"
+    norm_excel_by_wh = { _normalize(name): cluster
+                         for name, cluster in WAREHOUSE_NAME_TO_CLUSTER.items() }
+
+    # Список всех названий КЛАСТЕРОВ из Excel (нормализованных) для подсказочного поиска
+    excel_clusters_norm = list({ _normalize(cluster) for cluster in WAREHOUSE_NAME_TO_CLUSTER.values() })
+    # Мап «нормализованный кластер -> исходный» для обратного восстановления
+    excel_norm_to_raw = { _normalize(cluster): cluster for cluster in WAREHOUSE_NAME_TO_CLUSTER.values() }
 
     for w in warehouses or []:
         wid = w.get("warehouse_id")
@@ -91,29 +87,21 @@ def build_id_map(warehouses: list[dict], persist: bool = True) -> int:
         if not wid:
             continue
 
-        target_cluster = None
+        # 1) Сначала пробуем по имени склада
+        target_cluster = norm_excel_by_wh.get(_normalize(wname))
 
-        # 1) матч по имени склада (строгий нормализованный ключ)
-        n = _normalize(wname)
-        target_cluster = norm_excel.get(n)
-
-        # 1a) частичное совпадение (если строгого нет)
-        if not target_cluster:
-            for key, val in norm_excel.items():
-                if key in n or n in key:
-                    target_cluster = val
-                    break
-
-        # 2) матч по имени кластера из API (если по складу не нашли)
+        # 2) Если не нашли — пробуем по названию кластера из API (подстрока)
         if not target_cluster and api_cluster:
-            cn = _normalize(api_cluster)
-            target_cluster = norm_api_cluster.get(cn)
+            ac = _normalize(api_cluster)
+            # Ищем Excel-кластер, где имя кластера из API является подстрокой
+            candidates = [c for c in excel_clusters_norm if ac in c or c in ac]
+            if candidates:
+                target_cluster = excel_norm_to_raw[candidates[0]]
 
         if target_cluster:
             try:
                 WAREHOUSE_ID_TO_CLUSTER[int(wid)] = target_cluster
             except Exception:
-                # на случай, если wid приходит строкой странного формата
                 WAREHOUSE_ID_TO_CLUSTER[int(str(wid))] = target_cluster
             matched += 1
 
