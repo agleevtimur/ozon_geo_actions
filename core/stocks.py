@@ -4,7 +4,7 @@ from pathlib import Path
 import json
 import time
 from typing import Dict, List, Optional
-from warehouses_map import WAREHOUSE_NAME_TO_CLUSTER
+from core.warehouses_map import WAREHOUSE_NAME_TO_CLUSTER
 
 # Рантайм-словарь ID→кластер (заполняется из кэша/из API)
 WAREHOUSE_ID_TO_CLUSTER: Dict[int, str] = {}
