@@ -3,6 +3,7 @@ from collections import defaultdict
 from pathlib import Path
 import json
 import time
+import re
 from typing import Dict, List, Optional
 from core.warehouses_map import WAREHOUSE_NAME_TO_CLUSTER
 
@@ -53,33 +54,73 @@ def _cache_is_fresh() -> bool:
     except Exception:
         return False
 
+def _normalize(s: str) -> str:
+    """Нормализуем имя: верхний регистр, убираем пробелы/знаки, выкидываем РФЦ/RFC"""
+    s = (s or "").upper()
+    s = s.replace("РФЦ", "").replace("RFC", "")
+    s = re.sub(r"[^А-ЯA-Z0-9]", "", s)  # только буквы/цифры
+    return s
 
-def build_id_map(warehouses: List[dict], persist: bool = True) -> int:
+# Маппинг названий кластеров из API -> твои кластеры (можно оставить пустым и дополнять по /dump_warehouses)
+API_CLUSTER_TO_OUR: dict[str, str] = {
+    # "МОСКВАИМО": "Москва, МО и Дальние регионы",
+    # "САНКТПЕТЕРБУРГИЛЕНОБЛАСТЬ": "Санкт-Петербург и СЗО",
+    # "КАЗАНЬИПОВОЛЖЬЕ": "Казань",
+    # ...
+}
+
+def build_id_map(warehouses: list[dict], persist: bool = True) -> int:
     """
-    Принимает список складов вида [{"warehouse_id":..., "name":"..."}]
-    Заполняет глобальный WAREHOUSE_ID_TO_CLUSTER из нашего ИМЯ→кластер.
-    Возвращает количество сопоставленных складов.
+    Создаём ID->кластер:
+    1) пытаемся по имени склада (фаззи-матч),
+    2) если не нашли — по имени кластера из API (через API_CLUSTER_TO_OUR).
     """
     global WAREHOUSE_ID_TO_CLUSTER
     WAREHOUSE_ID_TO_CLUSTER.clear()
     matched = 0
+
+    # Нормализуем ключи Excel-маппинга
+    norm_excel = { _normalize(name): cluster for name, cluster in WAREHOUSE_NAME_TO_CLUSTER.items() }
+    # Нормализуем словарь «имя кластера API -> наш кластер»
+    norm_api_cluster = { _normalize(k): v for k, v in API_CLUSTER_TO_OUR.items() }
+
     for w in warehouses or []:
         wid = w.get("warehouse_id")
-        name = (w.get("name") or "").strip() if w.get("name") else None
-        if not wid or not name:
+        wname = (w.get("name") or "").strip()
+        api_cluster = (w.get("cluster_name_from_api") or "").strip()
+        if not wid:
             continue
-        cluster = WAREHOUSE_NAME_TO_CLUSTER.get(name)
-        if cluster:
+
+        target_cluster = None
+
+        # 1) матч по имени склада (строгий нормализованный ключ)
+        n = _normalize(wname)
+        target_cluster = norm_excel.get(n)
+
+        # 1a) частичное совпадение (если строгого нет)
+        if not target_cluster:
+            for key, val in norm_excel.items():
+                if key in n or n in key:
+                    target_cluster = val
+                    break
+
+        # 2) матч по имени кластера из API (если по складу не нашли)
+        if not target_cluster and api_cluster:
+            cn = _normalize(api_cluster)
+            target_cluster = norm_api_cluster.get(cn)
+
+        if target_cluster:
             try:
-                WAREHOUSE_ID_TO_CLUSTER[int(wid)] = cluster
-                matched += 1
+                WAREHOUSE_ID_TO_CLUSTER[int(wid)] = target_cluster
             except Exception:
-                pass
+                # на случай, если wid приходит строкой странного формата
+                WAREHOUSE_ID_TO_CLUSTER[int(str(wid))] = target_cluster
+            matched += 1
+
     if persist and matched:
         _save_cache()
     return matched
-
-
+    
 def ensure_id_map(fetch_warehouses_func, force: bool = False) -> int:
     """
     Обеспечить наличие актуального ID→кластер.
