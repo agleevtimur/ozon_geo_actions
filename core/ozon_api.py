@@ -65,8 +65,7 @@ def get_warehouses():
         # тип кластера может быть "OZON" — НЕ отфильтровываем его жёстко
         for lc in c.get("logistic_clusters", []) or []:
             for w in lc.get("warehouses", []) or []:
-                w_type = (w.get("type") or "").upper()
-                if w_type != "FULL_FILLMENT":
+                if (w.get("type") or "").upper() != "FULL_FILLMENT":
                     continue
                 out.append({
                     "warehouse_id": w.get("warehouse_id"),  # может быть str или int — ок
