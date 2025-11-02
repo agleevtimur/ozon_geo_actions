@@ -195,6 +195,17 @@ async def disable(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_rules(rules)
     await update.message.reply_text(f"SKU {sku} выключен.")
 
+@admin_only
+async def dump_warehouses(update, context):
+    from core.ozon_api import get_warehouses
+    ws = get_warehouses()
+    lines = []
+    for w in ws[:20]:
+        lines.append(f"{w.get('warehouse_id')} | {w.get('name')} | api_cluster={w.get('cluster_name_from_api')}")
+    if not lines:
+        lines = ["(пусто)"]
+    await update.message.reply_text("Примеры складов из Ozon:\n" + "\n".join(lines))
+
 def main():
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     app = Application.builder().token(token).build()
@@ -213,6 +224,7 @@ def main():
     app.add_handler(CommandHandler("enable", enable))
     app.add_handler(CommandHandler("disable", disable))
     app.add_handler(CommandHandler("refresh_warehouses", refresh_warehouses))
+    app.add_handler(CommandHandler("dump_warehouses", dump_warehouses))
 
     webhook_url = os.getenv("WEBHOOK_URL", "").strip()
     if webhook_url:
