@@ -1,97 +1,95 @@
-import os, json
+import os, time, json
 from playwright.sync_api import sync_playwright
 
-PROMO_NAME_TPL = "{group_name}"
+OZON_SELLER_BASE = "https://seller.ozon.ru"
+PROMO_LIST_URL   = f"{OZON_SELLER_BASE}/app/highlights/my-highlights/list"  # список «Своих акций»
+def _auth_with_cookies(context):
+    """Авторизация в Озоне через cookies (из env или cookies.json)."""
+    raw = os.getenv("OZON_COOKIES_JSON")
+    if not raw and os.path.exists("cookies.json"):
+        raw = open("cookies.json","r",encoding="utf-8").read()
+    if not raw:
+        raise RuntimeError("Нет cookies. Задай OZON_COOKIES_JSON или cookies.json")
+    context.add_cookies(json.loads(raw))
 
-def _ensure_cookies_file(cookies_path="cookies.json"):
-    if not os.path.exists(cookies_path) and os.getenv("COOKIES_JSON"):
-        try:
-            data = json.loads(os.getenv("COOKIES_JSON"))
-            with open(cookies_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False)
-        except Exception:
-            pass
-
-def ensure_context(pw, cookies_path, headless=True):
-    _ensure_cookies_file(cookies_path)
-    browser = pw.chromium.launch(headless=headless)
-    context = browser.new_context()
-    if os.path.exists(cookies_path):
-        with open(cookies_path, "r", encoding="utf-8") as f:
-            context.add_cookies(json.load(f))
-    page = context.new_page()
-    page.goto("https://seller.ozon.ru/app/dashboard", wait_until="networkidle")
-    try:
-        page.get_by_role("button", name="Цены и акции").click(timeout=4000)
-    except:
-        page.get_by_text("Цены и акции", exact=False).first.click()
-    if page.get_by_role("link", name="Мои акции").count():
-        page.get_by_role("link", name="Мои акции").click()
-    else:
-        page.get_by_text("Собственные акции", exact=False).first.click()
+def _find_promo(page, promo_name):
+    """Находит и открывает карточку акции по названию."""
+    page.goto(PROMO_LIST_URL, wait_until="domcontentloaded", timeout=120_000)
     page.wait_for_load_state("networkidle")
-    return browser, context, page
+    # Поиск по названию
+    if page.get_by_placeholder("Поиск").count():
+        search = page.get_by_placeholder("Поиск")
+        search.fill(promo_name)
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(1000)
+    promo_card = page.locator(f"text={promo_name}").first
+    promo_card.wait_for(timeout=60_000)
+    promo_card.click()
 
-def find_or_create_promo(page, promo_name):
-    try:
-        page.fill('input[placeholder="Поиск"]', promo_name); page.keyboard.press("Enter"); page.wait_for_timeout(800)
-    except: pass
-    if page.locator(f"text={promo_name}").count() > 0:
-        page.locator(f"text={promo_name}").first.click(); page.wait_for_load_state("networkidle"); return "edit"
-    page.get_by_role("button", name="Создать акцию").click(); page.wait_for_load_state("networkidle")
-    try: page.fill('input[name="promoName"]', promo_name)
-    except: page.get_by_placeholder("Название").fill(promo_name)
-    return "create"
+def _clear_regions(page):
+    """Снимает все выбранные регионы, если есть кнопка 'Очистить'."""
+    btn = page.get_by_role("button", name=lambda n: n and ("Очист" in n or "Снять" in n))
+    if btn.count():
+        btn.first.click()
+        page.wait_for_timeout(300)
 
-def set_cities(page, cities: list[str]):
-    page.get_by_text("Города", exact=False).click()
-    try:
-        if page.get_by_role("button", name="Снять выделение").is_visible():
-            page.get_by_role("button", name="Снять выделение").click()
-    except: pass
-    for city in cities:
+def _select_regions(page, region_names):
+    """Отмечает регионы по именам (как в UI)."""
+    def click_region(name):
+        if page.get_by_placeholder("Поиск").count():
+            f = page.get_by_placeholder("Поиск")
+            f.fill(name)
+            page.wait_for_timeout(400)
+        label = page.locator(f"label:has-text('{name}')")
+        if not label.count():
+            label = page.locator(f"text={name}").first
+        if label.count():
+            label.click()
+            page.wait_for_timeout(200)
+        else:
+            print(f"[warn] Регион '{name}' не найден")
+
+    for n in region_names:
+        click_region(n)
+
+def update_promo_regions_ui(promo_name: str, region_names: list[str], headless=True):
+    """
+    Открывает акцию promo_name и обновляет список регионов.
+    """
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=headless, args=["--no-sandbox"])
+        context = browser.new_context()
+        _auth_with_cookies(context)
+        page = context.new_page()
+
         try:
-            page.fill('input[placeholder="Поиск города"]', city); page.wait_for_timeout(200)
-            page.get_by_role("checkbox", name=city, exact=False).check()
-        except: pass
-    try: page.get_by_role("button", name="Сохранить").click()
-    except: pass
+            _find_promo(page, promo_name)
+            # нажать «Редактировать»
+            edit_btn = page.get_by_role("button", name=lambda n: n and ("Редакт" in n or "Измен" in n))
+            if not edit_btn.count():
+                more = page.get_by_role("button", name=lambda n: n and ("…" in n or "Ещё" in n))
+                if more.count():
+                    more.first.click()
+                    page.wait_for_timeout(300)
+                    edit_btn = page.get_by_role("menuitem", name=lambda n: n and ("Редакт" in n or "Измен" in n))
+            edit_btn.first.click()
+            page.wait_for_timeout(700)
 
-def set_discount(page, percent: int):
-    page.get_by_text("Размер скидки", exact=False).click()
-    fld = page.locator('input[name="discount"]'); 
-    if not fld.count(): fld = page.get_by_placeholder("%")
-    fld.fill(str(percent))
-    try: page.get_by_role("button", name="Сохранить").click()
-    except: pass
+            # вкладка География
+            geo_tab = page.locator("text=География").first
+            if geo_tab.count():
+                geo_tab.click()
+                page.wait_for_timeout(400)
 
-def set_products(page, offer_ids: list[str]):
-    page.get_by_text("Товары", exact=False).click()
-    try:
-        if page.get_by_role("button", name="Снять все").is_visible():
-            page.get_by_role("button", name="Снять все").click()
-    except: pass
-    for oid in offer_ids:
-        try:
-            page.fill('input[placeholder="Поиск товара"]', oid); page.wait_for_timeout(250)
-            page.get_by_role("checkbox", name=oid, exact=False).check()
-        except: pass
-    try: page.get_by_role("button", name="Сохранить").click()
-    except: pass
+            _clear_regions(page)
+            _select_regions(page, region_names)
 
-def save_promo(page):
-    try: page.get_by_role("button", name="Запустить продвижение").click()
-    except:
-        try: page.get_by_role("button", name="Сохранить").click()
-        except: pass
+            # сохранить
+            save_btn = page.get_by_role("button", name=lambda n: n and ("Сохран" in n or "Примен" in n))
+            save_btn.first.click()
+            page.wait_for_timeout(1500)
+            print(f"✅ {promo_name}: обновлены регионы ({len(region_names)})")
 
-def upsert_promo(group_name: str, cities: list[str], discount: int, offer_ids: list[str], cookies_path="cookies.json", headless=True):
-    with sync_playwright() as pw:
-        browser, context, page = ensure_context(pw, cookies_path, headless=headless)
-        promo_name = PROMO_NAME_TPL.format(group_name=group_name)
-        _mode = find_or_create_promo(page, promo_name)
-        set_cities(page, cities or [])
-        set_discount(page, int(discount))
-        if offer_ids: set_products(page, offer_ids)
-        save_promo(page)
-        context.storage_state(path=cookies_path); browser.close()
+        finally:
+            context.close()
+            browser.close()
