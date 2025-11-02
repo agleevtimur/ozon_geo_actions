@@ -181,9 +181,11 @@ async def disable(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_rules(rules)
     await update.message.reply_text(f"SKU {sku} выключен.")
 
-async def main():
+def main():
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     app = Application.builder().token(token).build()
+
+    # регистрируем handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("status", status))
@@ -197,12 +199,18 @@ async def main():
     app.add_handler(CommandHandler("enable", enable))
     app.add_handler(CommandHandler("disable", disable))
 
-    webhook_url = os.getenv("WEBHOOK_URL","").strip()
+    webhook_url = os.getenv("WEBHOOK_URL", "").strip()
     if webhook_url:
-        await app.bot.set_webhook(url=webhook_url, secret_token=os.getenv("WEBHOOK_SECRET",""))
-        await app.initialize(); await app.start(); await asyncio.Event().wait()
+        # если решишь когда-нибудь перейти на вебхук
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=int(os.getenv("PORT", "8080")),
+            url=webhook_url,
+            secret_token=os.getenv("WEBHOOK_SECRET", "")
+        )
     else:
-        await app.run_polling()
+        # обычный прод-режим через polling
+        app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
