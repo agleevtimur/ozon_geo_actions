@@ -1,24 +1,10 @@
 # core/promo_sync.py
 from core.rules import load_rules
+from core.rules import GROUP_TO_PROMO_NAME
 from core.ozon_api import get_stocks
 from core.stocks import aggregate_by_cluster
 from core.geo_map import CLUSTER_TO_REGIONS  # кластер -> [имена регионов из UI]
 from core.promo_ui import update_promo_regions_ui
-
-# сопоставление групп -> названия акций в ЛК (заполни под себя)
-GROUP_TO_PROMO_NAME = {
-    "GEO-G1": "10 скидка",
-    "GEO-G2": "9 скидка",
-    "GEO-G3": "8 скидка",
-    "GEO-G4": "7 скидка",
-    "GEO-G5": "6 скидка",
-    "GEO-G6": "5 скидка",
-    "GEO-G7": "4 скидка",
-    "GEO-G8": "3 ОБЩАЯ скидка",
-    "GEO-G9": "2 скидка",
-    "GEO-G10": "1 скидка",
-    # ...если у тебя другие имена акций — впиши их здесь
-}
 
 def compute_regions_for_group(skus: list[int]) -> list[str]:
     """Из остатков получаем список регионов для включения в акцию."""
