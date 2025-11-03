@@ -93,3 +93,25 @@ def update_promo_regions_ui(promo_name: str, region_names: list[str], headless=T
         finally:
             context.close()
             browser.close()
+# ---- Backward-compat shim ----
+def upsert_promo(promo_name: str,
+                 regions: list[str] | None = None,
+                 discount: float | int | None = None,
+                 headless: bool = True) -> None:
+    """
+    Совместимость со старым кодом:
+    - Раньше создавали/обновляли акцию через upsert_promo.
+    - Сейчас создание «своих акций» через UI мы не делаем автоматически,
+      поэтому этот шим только ОБНОВЛЯЕТ регионы уже существующей акции.
+    - Параметр discount игнорируется (скидку заранее настраиваем вручную).
+
+    :param promo_name: Точное название существующей «своей акции» в ЛК Озон.
+    :param regions: Список регионов (имена как в UI). Если None/пусто — не трогаем.
+    :param discount: Игнорируется. Оставлено для совместимости.
+    :param headless: Режим браузера Playwright.
+    """
+    if not regions:
+        # ничего обновлять — тихо выходим
+        return
+    # Переиспользуем текущую реализацию обновления регионов
+    update_promo_regions_ui(promo_name, regions, headless=headless)
