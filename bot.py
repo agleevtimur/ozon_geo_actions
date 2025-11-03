@@ -11,6 +11,34 @@ from core.ozon_api import get_stocks, get_warehouses
 from core.stocks import aggregate_by_cluster, ensure_id_map
 from core.decide import clusters_on_for_sku, clusters_for_group, discount_for_group
 from run_once import main as run_pipeline
+from sync_geo import run_sync_geo
+
+class TempEnv:
+    """
+    Контекстный менеджер для временной установки ENV-переменных.
+    Пример:
+        with TempEnv(DRY_RUN="1", HEADLESS="1"):
+            run_sync_geo()
+    После выхода из блока все переменные вернутся в исходное состояние.
+    """
+    def __init__(self, **pairs):
+        self.pairs = pairs
+        self.prev = {}
+
+    def __enter__(self):
+        for k, v in self.pairs.items():
+            self.prev[k] = os.environ.get(k)
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = str(v)
+
+    def __exit__(self, exc_type, exc, tb):
+        for k, old in self.prev.items():
+            if old is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = old
 
 load_dotenv()
 log = setup_logger()
@@ -274,6 +302,32 @@ async def debug_stocks(update, context):
         text = text[:3800] + "\n… (обрезано)"
     await update.message.reply_text(text)
 
+# /dry_sync_geo — только лог, без кликов в UI
+async def dry_sync_geo(update, context):
+    await update.message.reply_text("Запускаю dry-run синхронизации гео…")
+    loop = asyncio.get_running_loop()
+    try:
+        func = functools.partial(run_sync_geo, "rules.yaml")
+        # DRY_RUN=1, HEADLESS=1 (по умолчанию)
+        with TempEnv(DRY_RUN="1"):
+            await loop.run_in_executor(None, func)
+        await update.message.reply_text("✅ Dry-run завершён. Смотри логи Railway.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка dry-run: {e}")
+
+# /sync_geo — реальный апдейт географии через UI
+async def sync_geo_cmd(update, context):
+    await update.message.reply_text("Запускаю синхронизацию гео (боевой режим)…")
+    loop = asyncio.get_running_loop()
+    try:
+        func = functools.partial(run_sync_geo, "rules.yaml")
+        # DRY_RUN=0 (или убрать), HEADLESS по умолчанию 1
+        with TempEnv(DRY_RUN=None):  # очистим, чтобы было не-dry
+            await loop.run_in_executor(None, func)
+        await update.message.reply_text("✅ Синхронизация завершена. Проверяй ЛК Озона.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка sync_geo: {e}")
+
 def main():
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     app = Application.builder().token(token).build()
@@ -294,6 +348,8 @@ def main():
     app.add_handler(CommandHandler("refresh_warehouses", refresh_warehouses))
     app.add_handler(CommandHandler("dump_warehouses", dump_warehouses))
     app.add_handler(CommandHandler("debug_stocks", debug_stocks))
+    application.add_handler(CommandHandler("dry_sync_geo", dry_sync_geo))
+    application.add_handler(CommandHandler("sync_geo", sync_geo_cmd))
 
     webhook_url = os.getenv("WEBHOOK_URL", "").strip()
     if webhook_url:
