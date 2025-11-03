@@ -348,8 +348,8 @@ def main():
     app.add_handler(CommandHandler("refresh_warehouses", refresh_warehouses))
     app.add_handler(CommandHandler("dump_warehouses", dump_warehouses))
     app.add_handler(CommandHandler("debug_stocks", debug_stocks))
-    application.add_handler(CommandHandler("dry_sync_geo", dry_sync_geo))
-    application.add_handler(CommandHandler("sync_geo", sync_geo_cmd))
+    app.add_handler(CommandHandler("dry_sync_geo", dry_sync_geo))
+    app.add_handler(CommandHandler("sync_geo", sync_geo_cmd))
 
     webhook_url = os.getenv("WEBHOOK_URL", "").strip()
     if webhook_url:
