@@ -13,6 +13,7 @@ ENV:
 
 from __future__ import annotations
 import os, sys, yaml, logging
+import functools
 from typing import Dict, List, Set
 
 # локальные модули
