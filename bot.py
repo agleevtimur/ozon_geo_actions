@@ -314,7 +314,10 @@ async def dry_sync_geo(update, context):
             await loop.run_in_executor(None, func)
         await update.message.reply_text("✅ Dry-run завершён. Смотри логи Railway.")
     except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка dry-run: {e}")
+        tb = traceback.format_exc()
+        msg = f"❌ Ошибка dry-run: {e}\n\n{tb}"
+        await update.message.reply_text(msg[:4000])  # чтобы Telegram не обрезал
+        print(tb)  # чтобы ушло и в Railway-логи
 
 # /sync_geo — реальный апдейт географии через UI
 async def sync_geo_cmd(update, context):
