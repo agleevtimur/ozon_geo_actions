@@ -4,7 +4,7 @@ from pathlib import Path
 import json
 import time
 import re
-from typing import Callable, List, Dict
+from typing import Callable, List, Dict, Optional
 from collections import defaultdict
 from core.warehouses_map import WAREHOUSE_NAME_TO_CLUSTER
 
