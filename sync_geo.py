@@ -1,29 +1,53 @@
 from __future__ import annotations
+
 import logging
-from typing import List, Dict, Set
-from core.stocks import aggregate_by_cluster
+
 from core.rules import GROUP_TO_PROMO_NAME, GROUP_TO_SKUS
+from core.stocks import aggregate_by_cluster, ensure_id_map, get_warehouses_via_clusters
+from core.promo_ui import upsert_promo_geography
 
 log = logging.getLogger(__name__)
 
-def run_sync_geo(dry_run: bool = False, force: bool = False, return_report: bool = False) -> str | None:
-    report: List[str] = []
-    def _add(line: str):
-        report.append(line); log.info(line)
+def apply_geo_for_group(group: str) -> str:
+    promo_name = GROUP_TO_PROMO_NAME.get(group)
+    if not promo_name:
+        return f"❌ {group} — нет promo_name"
+    skus = GROUP_TO_SKUS.get(group, [])
+    if not skus:
+        return f"⚠️ {promo_name} ({group}) — нет SKU (пропуск)"
+    agg = aggregate_by_cluster(skus)
+    clusters = sorted({c for arr in agg.values() for c in arr})
+    if not clusters:
+        return f"• {promo_name} ({group}) — нет остатков"
+    status = upsert_promo_geography(promo_name, clusters)
+    if status == "skipped":
+        return f"⚪ {promo_name} ({group}) — уже актуальна ({len(clusters)} регионов)"
+    elif status == "updated":
+        return f"✅ {promo_name} ({group}) — обновлена ({len(clusters)} регионов)"
+    else:
+        return f"❌ {promo_name} ({group}) — ошибка"
 
-    _add("=== Синхронизация гео-акций ===")
-    _add(f"DRY_RUN={dry_run}")
+def run_sync_geo(dry_run: bool = False) -> str:
+    matched = ensure_id_map(fetch_warehouses_func=get_warehouses_via_clusters)
+    log.info("Сопоставлено складов: %d", matched)
+    lines = []
+    for group in GROUP_TO_PROMO_NAME.keys():
+        if dry_run:
+            skus = GROUP_TO_SKUS.get(group, [])
+            agg = aggregate_by_cluster(skus)
+            clusters = sorted({c for arr in agg.values() for c in arr})
+            promo_name = GROUP_TO_PROMO_NAME[group]
+            if clusters:
+                lines.append(f"• {promo_name} ({group}) — {len(skus)} SKU → {', '.join(clusters)}")
+            else:
+                lines.append(f"• {promo_name} ({group}) — нет остатков")
+        else:
+            lines.append(apply_geo_for_group(group))
+    return "\n".join(lines)
 
-    all_skus = sorted({sku for skus in GROUP_TO_SKUS.values() for sku in skus})
-    agg = aggregate_by_cluster(all_skus)  # sku -> set(cluster_names)
-
-    _add("Результат расчёта (по группам):")
-    for code, promo_name in GROUP_TO_PROMO_NAME.items():
-        skus: List[int] = GROUP_TO_SKUS.get(code, [])
-        clusters_on: Set[str] = set()
-        for sku in skus:
-            clusters_on |= agg.get(sku, set())
-        clusters_sorted = sorted(clusters_on)
-        _add(f"• {promo_name} ({code}) — {len(skus)} SKU → {', '.join(clusters_sorted) if clusters_sorted else '—'}")
-
-    return "\n".join(report) if return_report else None
+def run_sync_geo_apply_one(identifier: str) -> str:
+    ident = identifier.lower().strip()
+    for g, promo in GROUP_TO_PROMO_NAME.items():
+        if g.lower() == ident or promo.lower() == ident:
+            return apply_geo_for_group(g)
+    return f"❌ Не найдена акция '{identifier}'."

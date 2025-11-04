@@ -1,49 +1,130 @@
 from __future__ import annotations
-import time
+
+import json
 import logging
-from typing import Dict, List, Set, Iterable, Any
-from core.ozon_api import post
+import os
+import time
+from typing import Dict, Iterable, List, Optional, Set
+
+from .ozon_api import post
 
 log = logging.getLogger(__name__)
 
-NONLOCAL_CLUSTERS = {"Казахстан", "Беларусь", "Армения"}
+CACHE_PATH = os.getenv("WAREHOUSE_CACHE_PATH", ".cache/warehouses_id_map.json")
+CACHE_TTL_SEC = int(os.getenv("WAREHOUSE_CACHE_TTL_SEC", "86400"))  # 24h
 
-def _chunks(seq: List[Any], n: int) -> Iterable[List[Any]]:
-    for i in range(0, len(seq), n):
-        yield seq[i:i+n]
+WAREHOUSE_ID_TO_CLUSTER: Dict[int, str] = {}
 
-def _normalize_items(resp: Any) -> List[dict]:
-    if isinstance(resp, dict):
-        return resp.get("items") or []
-    if isinstance(resp, list):
-        return resp
-    return []
+def _cache_is_fresh(path: str = CACHE_PATH) -> bool:
+    try:
+        st = os.stat(path)
+        return (time.time() - st.st_mtime) <= CACHE_TTL_SEC
+    except FileNotFoundError:
+        return False
 
-def _clusters_from_items(items: List[dict], min_available: int = 1) -> Dict[int, Set[str]]:
-    result: Dict[int, Set[str]] = {}
-    for it in items:
+def _load_cache(path: str = CACHE_PATH) -> bool:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            WAREHOUSE_ID_TO_CLUSTER.clear()
+            for k, v in data.items():
+                try:
+                    WAREHOUSE_ID_TO_CLUSTER[int(k)] = str(v)
+                except Exception:
+                    continue
+            return True
+        return False
+    except FileNotFoundError:
+        return False
+    except Exception as e:
+        log.warning("Не удалось загрузить кэш %s: %s", path, e)
+        return False
+
+def _save_cache(path: str = CACHE_PATH) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({str(k): v for k, v in WAREHOUSE_ID_TO_CLUSTER.items()}, f, ensure_ascii=False, indent=2)
+
+def build_id_map(warehouses: List[dict], persist: bool = True) -> int:
+    WAREHOUSE_ID_TO_CLUSTER.clear()
+    matched = 0
+    for w in warehouses or []:
         try:
-            sku = int(it.get("sku"))
-            cluster_name = it.get("cluster_name") or ""
-            avail = int(it.get("available_stock_count") or 0)
-            if not cluster_name or cluster_name in NONLOCAL_CLUSTERS:
-                continue
-            if avail >= min_available:
-                result.setdefault(sku, set()).add(cluster_name)
+            wid = int(w.get("warehouse_id") or 0)
         except Exception:
             continue
-    return result
+        if not wid:
+            continue
+        cluster = w.get("cluster_name") or w.get("cluster") or w.get("api_cluster")
+        if not cluster:
+            continue
+        WAREHOUSE_ID_TO_CLUSTER[wid] = str(cluster)
+        matched += 1
+    if persist and matched:
+        _save_cache()
+    return matched
 
-def aggregate_by_cluster(skus: List[int], *, batch_size: int = 100) -> Dict[int, Set[str]]:
-    if not skus:
-        return {}
-    agg: Dict[int, Set[str]] = {}
-    for batch in _chunks(list(map(str, skus)), batch_size):
-        payload = {"skus": batch}
+def ensure_id_map(*, fetch_warehouses_func, force: bool = False) -> int:
+    if WAREHOUSE_ID_TO_CLUSTER and not force:
+        return len(WAREHOUSE_ID_TO_CLUSTER)
+    if not force and _cache_is_fresh() and _load_cache():
+        return len(WAREHOUSE_ID_TO_CLUSTER)
+    try:
+        warehouses = fetch_warehouses_func()
+        return build_id_map(warehouses, persist=True)
+    except Exception as e:
+        log.warning("Не удалось обновить карту складов из API: %s. Пытаюсь загрузить кэш…", e)
+        _load_cache()
+        return len(WAREHOUSE_ID_TO_CLUSTER)
+
+def get_warehouses_via_clusters() -> List[dict]:
+    payload = {"limit": 1000, "offset": 0}
+    resp = post("/v1/cluster/list", payload)
+    out: List[dict] = []
+    for c in resp.get("clusters", []) or []:
+        cname = c.get("name")
+        for lc in (c.get("logistic_clusters") or []):
+            for w in (lc.get("warehouses") or []):
+                out.append({
+                    "warehouse_id": w.get("warehouse_id"),
+                    "name": w.get("name"),
+                    "cluster_name": cname
+                })
+    return out
+
+def aggregate_by_cluster(skus: Iterable[int | str]) -> Dict[int, Set[str]]:
+    skus_list = [str(s).strip() for s in skus if str(s).strip()]
+    result: Dict[int, Set[str]] = {}
+    if not skus_list:
+        return result
+    CHUNK = 100
+    for i in range(0, len(skus_list), CHUNK):
+        chunk = skus_list[i:i+CHUNK]
+        payload = {"skus": chunk}
         resp = post("/v1/analytics/stocks", payload)
-        items = _normalize_items(resp)
-        part = _clusters_from_items(items)
-        for sku, clusters in part.items():
-            agg.setdefault(sku, set()).update(clusters)
-        time.sleep(0.2)
-    return agg
+        items = resp.get("items") or resp
+        if isinstance(items, dict):
+            items = items.get("items", [])
+        for it in (items or []):
+            try:
+                sku = int(it.get("sku") or it.get("product_id") or 0)
+            except Exception:
+                continue
+            if not sku:
+                continue
+            avail = int(it.get("available_stock_count") or it.get("present") or 0)
+            if avail <= 0:
+                continue
+            cname = it.get("cluster_name")
+            if not cname:
+                wid = it.get("warehouse_id")
+                try:
+                    if wid is not None:
+                        cname = WAREHOUSE_ID_TO_CLUSTER.get(int(wid))
+                except Exception:
+                    cname = None
+            if not cname:
+                continue
+            result.setdefault(sku, set()).add(str(cname))
+    return result
