@@ -1,28 +1,15 @@
-import yaml, threading
-from pathlib import Path
-_LOCK = threading.Lock()
-RULES_PATH = Path("rules.yaml")
-def load_rules():
-    with _LOCK:
-        with RULES_PATH.open("r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-def save_rules(data: dict):
-    with _LOCK:
-        tmp = RULES_PATH.with_suffix(".tmp")
-        with tmp.open("w", encoding="utf-8") as f:
-            yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
-        tmp.replace(RULES_PATH)
+from __future__ import annotations
 
 GROUP_TO_PROMO_NAME = {
     "GEO-G1": "10 скидка",
     "GEO-G2": "9 скидка",
     "GEO-G3": "8 скидка",
     "GEO-G4": "7 скидка",
-    "GEO-G5": "6 скидка",
-    "GEO-G6": "5 скидка",
-    "GEO-G7": "4 скидка",
-    "GEO-G8": "3 ОБЩАЯ скидка",
-    "GEO-G9": "2 скидка",
-    "GEO-G10": "1 скидка",
-    # ...если у тебя другие имена акций — впиши их здесь
+}
+
+GROUP_TO_SKUS = {
+    "GEO-G1": [2093202384, 2093193904, 1623463208],
+    "GEO-G2": [1623130393, 1623390586, 1623121210],
+    "GEO-G3": [1623103356, 1126874577, 1126807106],
+    "GEO-G4": [1126287877, 1126245121, 1126802724],
 }
