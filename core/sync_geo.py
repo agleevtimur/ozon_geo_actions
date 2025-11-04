@@ -21,6 +21,7 @@ from core.stocks import aggregate_by_cluster, ensure_id_map
 from core.geo_map import CLUSTER_TO_REGIONS
 from core.promo_ui import update_promo_regions_ui
 from core.rules import GROUP_TO_PROMO_NAME  # словарь GEO-Gx -> "10 скидка"
+from core.ozon_api import get_warehouses
 
 # -----------------------------------------------------------------------------
 
