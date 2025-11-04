@@ -8,10 +8,10 @@ log = logging.getLogger(__name__)
 BASE_URL = os.getenv("OZON_API_BASE", "https://api-seller.ozon.ru")
 
 def _headers() -> Dict[str, str]:
-    client_id = os.getenv("OZON_API_CLIENT_ID")
+    client_id = os.getenv("OZON_CLIENT_ID")
     api_key = os.getenv("OZON_API_KEY")
     if not client_id or not api_key:
-        raise RuntimeError("OZON_API_CLIENT_ID / OZON_API_KEY are not set")
+        raise RuntimeError("OZON_CLIENT_ID / OZON_API_KEY are not set")
     return {
         "Client-Id": client_id,
         "Api-Key": api_key,
