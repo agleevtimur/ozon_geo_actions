@@ -4,7 +4,7 @@ import logging
 
 from core.rules import GROUP_TO_PROMO_NAME, GROUP_TO_SKUS
 from core.stocks import aggregate_by_cluster, ensure_id_map, get_warehouses_via_clusters
-from core.promo_ui import upsert_promo_geography
+from core.promo_ui import upsert_promo
 
 log = logging.getLogger(__name__)
 
