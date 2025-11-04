@@ -14,6 +14,7 @@ from core.decide import clusters_on_for_sku, clusters_for_group, discount_for_gr
 from run_once import main as run_pipeline
 from sync_geo import run_sync_geo
 import traceback
+import inspect
 
 class TempEnv:
     """
@@ -323,15 +324,71 @@ async def debug_stocks(update, context):
 async def dry_sync_geo(update, context):
     try:
         await update.message.reply_text("⚙️ Запускаю dry-run синхронизации гео-акций…")
+
+        # Импортируем здесь, чтобы точно увидеть актуальный объект
+        from sync_geo import run_sync_geo  # <- какой именно файл подхватился, покажем ниже
+
+        # Диагностика: откуда функция и какая у неё сигнатура
+        mod = getattr(run_sync_geo, "__module__", "<unknown>")
+        try:
+            src = getattr(__import__(mod, fromlist=['']),'__file__', None)
+        except Exception:
+            src = None
+
+        sig = None
+        try:
+            sig = str(inspect.signature(run_sync_geo))
+        except Exception:
+            sig = "<signature not available>"
+
+        diag = f"run_sync_geo loaded from: {mod} {src or ''}\nsignature: {sig}"
+        # Покажем диагностику сразу, это поможет понять, что реально грузится на Railway
+        await update.message.reply_text(diag[:1000])
+
+        # Готовим вызов с fallback по сигнатуре:
+        params = {}
+        try:
+            ps = inspect.signature(run_sync_geo).parameters
+            if {"dry_run", "force", "return_report"}.issubset(ps.keys()):
+                # Новая сигнатура — вызываем с kwargs
+                params = dict(dry_run=True, force=False, return_report=True)
+            else:
+                # Старая сигнатура — пробуем позиционные варианты
+                # Популярные варианты:
+                # () | (dry_run) | (dry_run, force) | (dry_run, force, return_report)
+                # Попробуем в порядке убывания информативности:
+                for args in [
+                    (True, False, True),
+                    (True, False),
+                    (True,),
+                    tuple(),
+                ]:
+                    try:
+                        loop = asyncio.get_event_loop()
+                        func = functools.partial(run_sync_geo, *args)
+                        report = await loop.run_in_executor(None, func)
+                        break
+                    except TypeError:
+                        report = None
+                # Отправим отчёт/заглушку и выйдем
+                if not report:
+                    report = "run_sync_geo() выполнилась без отчёта. Обнови sync_geo.py до версии с параметрами."
+                await _send_long(update.message.chat, "✅ Dry-run завершён.\n\n" + str(report))
+                return
+        except Exception:
+            # Если не смогли introspect — попробуем новый формат, иначе старый без аргументов
+            params = dict(dry_run=True, force=False, return_report=True)
+
+        # Основной путь: новая сигнатура с kwargs
         loop = asyncio.get_event_loop()
-        # вернём текст отчёта из воркера
-        func = functools.partial(run_sync_geo, dry_run=True, force=False, return_report=True)
-        report: str | None = await loop.run_in_executor(None, func)
+        func = functools.partial(run_sync_geo, **params)
+        report = await loop.run_in_executor(None, func)
 
         if report:
-            await _send_long(update.message.chat, "✅ Dry-run завершён.\n\n" + report)
+            await _send_long(update.message.chat, "✅ Dry-run завершён.\n\n" + str(report))
         else:
-            await update.message.reply_text("✅ Dry-run завершён (но отчёт пуст). Смотри логи Railway.")
+            await update.message.reply_text("✅ Dry-run завершён (отчёт пуст). Смотри логи Railway.")
+
     except Exception as e:
         tb = traceback.format_exc()
         await update.message.reply_text(f"❌ Ошибка dry-run: {e}\n\n{tb}"[:4000])
