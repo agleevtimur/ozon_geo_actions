@@ -112,50 +112,73 @@ def _normalize(s: str) -> str:
     s = re.sub(r"[^А-ЯA-Z0-9]", "", s)   # убираем всё, кроме букв/цифр
     return s
 
-def build_id_map(warehouses: list[dict], persist: bool = True) -> int:
+def _iter_warehouse_dicts(obj):
     """
-    Создаём ID->кластер:
-    1) по имени склада (нормализованный ключ),
-    2) если не нашли — по имени кластера из API:
-       ищем Excel-кластер, который содержит это имя (нормализованно).
+    Универсальный итератор по складам.
+    Принимает:
+      - плоский список [{warehouse_id, name, ...}]
+      - список смешанных элементов (в т.ч. warehouses[])
+      - дерево от /v1/cluster/list: {clusters:[{logistic_clusters:[{warehouses:[...] }]}]}
+    На выходе yield'ит только dict-склады.
+    """
+    if not obj:
+        return
+    # dict на входе
+    if isinstance(obj, dict):
+        # кейс: уже склад
+        if "warehouse_id" in obj and "name" in obj:
+            yield obj
+        # кейс: корень с clusters
+        if "clusters" in obj and isinstance(obj["clusters"], list):
+            for c in obj["clusters"]:
+                if not isinstance(c, dict):
+                    continue
+                for lc in (c.get("logistic_clusters") or []):
+                    if not isinstance(lc, dict):
+                        continue
+                    for w in (lc.get("warehouses") or []):
+                        if isinstance(w, dict):
+                            yield w
+        # кейс: корень с logistic_clusters
+        if "logistic_clusters" in obj and isinstance(obj["logistic_clusters"], list):
+            for lc in obj["logistic_clusters"]:
+                if not isinstance(lc, dict):
+                    continue
+                for w in (lc.get("warehouses") or []):
+                    if isinstance(w, dict):
+                        yield w
+        return
+
+    # list на входе
+    if isinstance(obj, list):
+        for item in obj:
+            # рекурсивно распаковываем
+            yield from _iter_warehouse_dicts(item)
+
+
+def build_id_map(warehouses, persist: bool = True) -> int:
+    """
+    Принимает 'warehouses' в любом из форматов и наполняет WAREHOUSE_ID_TO_CLUSTER.
+    Возвращает кол-во сопоставленных складов.
     """
     global WAREHOUSE_ID_TO_CLUSTER
     WAREHOUSE_ID_TO_CLUSTER.clear()
     matched = 0
 
-    # Нормализуем МАП из Excel: "ИМЯ СКЛАДА" -> "наш кластер"
-    norm_excel_by_wh = { _normalize(name): cluster
-                         for name, cluster in WAREHOUSE_NAME_TO_CLUSTER.items() }
-
-    # Список всех названий КЛАСТЕРОВ из Excel (нормализованных) для подсказочного поиска
-    excel_clusters_norm = list({ _normalize(cluster) for cluster in WAREHOUSE_NAME_TO_CLUSTER.values() })
-    # Мап «нормализованный кластер -> исходный» для обратного восстановления
-    excel_norm_to_raw = { _normalize(cluster): cluster for cluster in WAREHOUSE_NAME_TO_CLUSTER.values() }
-
-    for w in warehouses or []:
-        wid = w.get("warehouse_id")
-        wname = (w.get("name") or "").strip()
-        api_cluster = (w.get("cluster_name_from_api") or "").strip()
-        if not wid:
-            continue
-
-        # 1) Сначала пробуем по имени склада
-        target_cluster = norm_excel_by_wh.get(_normalize(wname))
-
-        # 2) Если не нашли — пробуем по названию кластера из API (подстрока)
-        if not target_cluster and api_cluster:
-            ac = _normalize(api_cluster)
-            # Ищем Excel-кластер, где имя кластера из API является подстрокой
-            candidates = [c for c in excel_clusters_norm if ac in c or c in ac]
-            if candidates:
-                target_cluster = excel_norm_to_raw[candidates[0]]
-
-        if target_cluster:
-            try:
-                WAREHOUSE_ID_TO_CLUSTER[int(wid)] = target_cluster
-            except Exception:
-                WAREHOUSE_ID_TO_CLUSTER[int(str(wid))] = target_cluster
+    for w in _iter_warehouse_dicts(warehouses):
+        try:
+            wid = w.get("warehouse_id")
+            name = (w.get("name") or "").strip()
+            if not wid or not name:
+                continue
+            cluster = WAREHOUSE_NAME_TO_CLUSTER.get(name)
+            if not cluster:
+                continue
+            WAREHOUSE_ID_TO_CLUSTER[int(wid)] = cluster
             matched += 1
+        except Exception:
+            # максимально защитно: пропускаем «кривой» элемент
+            continue
 
     if persist and matched:
         _save_cache()
