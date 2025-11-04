@@ -238,7 +238,15 @@ def aggregate_by_cluster(resp: dict) -> dict[int, dict[str, int]]:
     Возвращает: { sku: { cluster: total_available, ... }, ... }
     """
     buckets = defaultdict(lambda: defaultdict(int))
-    for it in (resp.get("items") or []):
+    items = []
+    if isinstance(resp, dict):
+        items = resp.get("items") or []
+    elif isinstance(resp, list):
+        items = resp
+    else:
+        items = []
+
+    for it in items:
         try:
             sku = int(it.get("sku"))
         except Exception:
