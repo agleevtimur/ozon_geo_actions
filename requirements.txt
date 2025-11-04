@@ -1,5 +1,5 @@
 python-telegram-bot==20.6
-httpx==0.25.2
+httpx==0.25.2           # совместимо с PTB 20.6
 pydantic==2.9.2
 tenacity==8.2.3
-playwright==1.49.0
+playwright==1.49.0      # совпадает с версией базового образа
