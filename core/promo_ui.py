@@ -9,7 +9,8 @@ from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 log = logging.getLogger("core.promo_ui")
 
 URL_ROOT = "https://seller.ozon.ru/"
-URL_OWN_PROMO = "https://seller.ozon.ru/app/promo/actions"
+# Новая страница 'Свои акции' (highlights)
+URL_OWN_PROMO = "https://seller.ozon.ru/app/highlights/my-highlights/list"
 NAV_TIMEOUT = 30000
 
 
@@ -38,28 +39,50 @@ def _goto(page, url: str):
 def _open_promo(page, promo_name: str) -> bool:
     """Открывает страницу акции по имени. Возвращает True при успехе."""
     _goto(page, URL_OWN_PROMO)
-    # Поиск по строке фильтра / поиску
+
+    # На странице "Свои подсветки/акции" есть таблица/список.
+    # Сначала попробуем поле поиска.
     try:
-        # Поищем любой понятный плейсхолдер
         search = None
-        for placeholder in ("Поиск", "Фильтр", "Найти", "Название акции"):
+        for placeholder in ("Поиск", "Фильтр", "Найти", "Название", "Название подсветки", "Название акции"):
             try:
-                search = page.get_by_placeholder(placeholder)
-                if search and search.count():
-                    search = search.first
+                loc = page.get_by_placeholder(placeholder)
+                if loc and loc.count():
+                    search = loc.first
                     break
             except Exception:
                 continue
         if search:
             search.click()
             search.fill(promo_name)
-            time.sleep(0.3)
-        else:
-            log.info("Поле поиска не найдено, пробую найти акцию кликом по тексту")
+            time.sleep(0.4)
 
-        # Клик по строке таблицы
-        page.locator(f"text={promo_name}").first.click(timeout=8000)
-        log.info("Акция '%s' открыта", promo_name)
+        # Затем кликаем по найденной строке списка/таблицы
+        # Пробуем несколько стратегий: точный текст и роль-ссылку/кнопку
+        tried = False
+        try:
+            page.locator(f"text={promo_name}").first.click(timeout=8000)
+            tried = True
+        except Exception:
+            pass
+        if not tried:
+            for role in ("link", "button"):
+                try:
+                    page.get_by_role(role, name=promo_name).first.click(timeout=8000)
+                    tried = True
+                    break
+                except Exception:
+                    continue
+        if tried:
+            log.info("Акция '%s' открыта", promo_name)
+            return True
+    except Exception as e:
+        log.error("Не удалось открыть акцию '%s' через поиск: %s", promo_name, e)
+
+    # Фоллбек: попробуем просто клик по тексту без поиска
+    try:
+        page.locator(f"text={promo_name}").first.click(timeout=10000)
+        log.info("Акция '%s' открыта (fallback)", promo_name)
         return True
     except Exception as e:
         log.error("Не удалось открыть акцию '%s': %s", promo_name, e)
@@ -67,39 +90,48 @@ def _open_promo(page, promo_name: str) -> bool:
 
 
 def _open_geo_tab(page) -> bool:
-    """Открывает вкладку 'География'. Возвращает True при успехе."""
-    try:
-        # Иногда это именно вкладка с текстом "География"
-        page.locator("text=География").first.click(timeout=6000)
-        time.sleep(0.3)
-        return True
-    except Exception:
-        # Иногда это секция/кнопка где-то в настройках
+    """Открывает вкладку/секцию 'География'. Возвращает True при успехе."""
+    # На новых формах это может быть вкладка/кнопка/дропдаун.
+    for txt in ("География", "Регион", "Гео", "Регионы"):
         try:
-            page.get_by_text("География").first.click(timeout=6000)
+            page.get_by_text(txt).first.click(timeout=6000)
             time.sleep(0.3)
             return True
-        except Exception as e:
-            log.error("Не удалось открыть вкладку 'География': %s", e)
-            return False
+        except Exception:
+            pass
+        try:
+            page.locator(f"button:has-text('{txt}')").first.click(timeout=6000)
+            time.sleep(0.3)
+            return True
+        except Exception:
+            pass
+        try:
+            page.locator(f"[role='tab']:has-text('{txt}')").first.click(timeout=6000)
+            time.sleep(0.3)
+            return True
+        except Exception:
+            pass
+    log.error("Не удалось открыть вкладку/секцию 'География'")
+    return False
 
 
 def _read_current_regions(page) -> List[str]:
     """Собирает текущие выбранные регионы из UI (насколько это возможно)."""
     regions = []
     try:
-        # Часто выбранные регионы отображаются как теги или элементы списка
+        # Часто выбранные регионы отображаются как теги/чипсы/плашки
         candidates = [
-            "div:has-text('Регион') >> .. >> span",  # эвристика
             "[data-testid='selected-region']",
             "div.tag, div.chips, span.tag, span.chip",
+            # Общая эвристика около формы географии
+            "section:has-text('Гео') span, section:has-text('Регион') span",
         ]
         for css in candidates:
             try:
                 loc = page.locator(css)
                 n = loc.count()
                 if n:
-                    for i in range(min(n, 200)):
+                    for i in range(min(n, 250)):
                         txt = (loc.nth(i).inner_text() or "").strip()
                         if txt and len(txt) < 80 and txt not in regions:
                             regions.append(txt)
@@ -112,20 +144,17 @@ def _read_current_regions(page) -> List[str]:
 
 def _set_regions(page, regions: List[str]) -> None:
     """Сбрасывает и устанавливает указанные регионы в UI."""
-    # 1) Сначала очистка
-    try:
-        # массовый сброс, если есть
-        for txt in ("Очистить", "Сбросить", "Удалить все"):
-            btns = page.get_by_role("button", name=txt)
-            if btns and btns.count():
-                btns.first.click()
-                time.sleep(0.2)
-                break
-    except Exception:
-        pass
+    # 1) Очистка
+    for btn_txt in ("Очистить", "Сбросить", "Удалить все"):
+        try:
+            page.get_by_role("button", name=btn_txt).first.click()
+            time.sleep(0.2)
+            break
+        except Exception:
+            pass
 
     try:
-        # точечное удаление выбранных
+        # Точечное удаление выбранных
         clear_btns = page.locator("button:has-text('Удалить')")
         cnt = clear_btns.count()
         for i in range(cnt):
@@ -138,7 +167,7 @@ def _set_regions(page, regions: List[str]) -> None:
     except Exception:
         pass
 
-    # 2) Добавляем новые
+    # 2) Добавление
     for region in regions:
         added = False
         for placeholder in ("Поиск регионов", "Поиск", "Регион", "Выберите регион"):
@@ -149,13 +178,13 @@ def _set_regions(page, regions: List[str]) -> None:
                     fld.click()
                     fld.fill(region)
                     time.sleep(0.25)
-                    page.locator(f"text={region}").first.click(timeout=5000)
+                    page.locator(f"text={region}").first.click(timeout=6000)
                     added = True
                     break
             except Exception:
                 continue
         if not added:
-            # запасной путь: попробуем искать чекбокс с этим текстом
+            # запасной путь — чекбокс/лейбл
             try:
                 page.get_by_label(region).check()
                 added = True
@@ -166,22 +195,22 @@ def _set_regions(page, regions: List[str]) -> None:
         else:
             log.warning("Не удалось добавить регион: %s", region)
 
-    # 3) Сохранить
-    for btn_text in ("Сохранить", "Применить"):
+    # 3) Сохранение
+    for btn in ("Сохранить", "Применить"):
         try:
-            page.get_by_role("button", name=btn_text).first.click(timeout=4000)
-            time.sleep(0.3)
+            page.get_by_role("button", name=btn).first.click(timeout=5000)
+            time.sleep(0.4)
             return
         except Exception:
             continue
-    log.warning("Кнопка сохранения не найдена — проверьте селекторы")
+    log.warning("Кнопка сохранения не найдена — проверьте селекторы/верстку")
 
 
 def upsert_promo(promo_name: str, regions: List[str], dry_run: bool = False) -> None:
     """
     Обновляет (upsert) географию акции по имени promo_name.
-    regions — список строк регионов (на русский), например:
-        ["Москва, МО и Дальние регионы", "Новосибирск и Сибирь"]
+    regions — список строк регионов (на русский):
+        ["Москва, МО и Дальние регионы", "Новосибирск и Сибирь", ...]
     Если dry_run=True — только логируем действия.
     """
     if dry_run:
@@ -189,7 +218,7 @@ def upsert_promo(promo_name: str, regions: List[str], dry_run: bool = False) -> 
         return
 
     prev = os.environ.get("PLAYWRIGHT_HEADLESS")
-    os.environ["PLAYWRIGHT_HEADLESS"] = "1"  # headless обязателен на Railway/Docker
+    os.environ["PLAYWRIGHT_HEADLESS"] = "1"  # headless на Railway/Docker
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(
@@ -200,22 +229,20 @@ def upsert_promo(promo_name: str, regions: List[str], dry_run: bool = False) -> 
             _apply_cookies_if_any(context)
             page = context.new_page()
 
-            # 1) заходим на главную, прогреваем сессию
+            # Прогрев
             _goto(page, URL_ROOT)
 
-            # 2) открываем акцию
+            # Открыть акцию
             if not _open_promo(page, promo_name):
                 raise RuntimeError(f"Акция '{promo_name}' не найдена/не открылась")
 
-            # 3) открываем Географию
+            # География
             if not _open_geo_tab(page):
-                raise RuntimeError("Вкладка 'География' не найдена")
+                raise RuntimeError("Вкладка/секция 'География' не найдена")
 
-            # 4) читаем текущие регионы и сравниваем
+            # Сравнить с текущим
             current = _read_current_regions(page)
-            need_set = sorted(set(regions))
-            to_apply = need_set
-
+            need_set = sorted(set([r.strip() for r in regions if r and r.strip()]))
             if current:
                 cur_norm = sorted(set([c.strip() for c in current if c and c.strip()]))
                 if cur_norm == need_set:
@@ -226,12 +253,12 @@ def upsert_promo(promo_name: str, regions: List[str], dry_run: bool = False) -> 
                 else:
                     log.info("Текущие регионы: %s", ", ".join(cur_norm))
 
-            # 5) выставляем регионы
-            _set_regions(page, to_apply)
+            # Применить
+            _set_regions(page, need_set)
 
             context.close()
             browser.close()
-            log.info("✅ Акция '%s' обновлена (регионов: %d)", promo_name, len(to_apply))
+            log.info("✅ Акция '%s' обновлена (регионов: %d)", promo_name, len(need_set))
     finally:
         if prev is None:
             os.environ.pop("PLAYWRIGHT_HEADLESS", None)
