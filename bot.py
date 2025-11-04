@@ -1,6 +1,7 @@
 
 import os, asyncio, logging, json
 from dotenv import load_dotenv
+import functools
 from functools import wraps
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
