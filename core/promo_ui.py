@@ -10,6 +10,26 @@ from typing import Iterable, Optional
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
+
+# --- minimal helper to avoid '__enter__' error when using `with temp_env(...)` ---
+@contextmanager
+def temp_env(**new_env):
+    """Temporarily set environment variables; restore them after the block."""
+    old_env = {}
+    try:
+        for k, v in new_env.items():
+            old_env[k] = os.environ.get(k)
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = str(v)
+        yield
+    finally:
+        for k, v in old_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 log = logging.getLogger(__name__)
 
 OZON_SELLER_BASE = os.getenv("OZON_SELLER_BASE", "https://seller.ozon.ru")
