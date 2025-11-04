@@ -1,67 +1,30 @@
-from __future__ import annotations
-
-import json
 import os
-import re
+import json
 import time
 import logging
-from contextlib import contextmanager
-from typing import Iterable, Optional
+from typing import List
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
+log = logging.getLogger("core.promo_ui")
 
-# --- minimal helper to avoid '__enter__' error when using `with temp_env(...)` ---
-@contextmanager
-def temp_env(**new_env):
-    """Temporarily set environment variables; restore them after the block."""
-    old_env = {}
+URL_ROOT = "https://seller.ozon.ru/"
+URL_OWN_PROMO = "https://seller.ozon.ru/app/promo/actions"
+NAV_TIMEOUT = 30000
+
+
+def _apply_cookies_if_any(context):
+    """Подхватывает ozon_cookies.json, если он есть рядом с проектом."""
     try:
-        for k, v in new_env.items():
-            old_env[k] = os.environ.get(k)
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = str(v)
-        yield
-    finally:
-        for k, v in old_env.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-log = logging.getLogger(__name__)
+        if os.path.exists("ozon_cookies.json"):
+            with open("ozon_cookies.json", "r", encoding="utf-8") as f:
+                cookies = json.load(f)
+            if isinstance(cookies, list) and cookies:
+                context.add_cookies(cookies)
+                log.info("Куки загружены (%d шт.) и применены", len(cookies))
+    except Exception as e:
+        log.warning("Не удалось применить куки: %s", e)
 
-OZON_SELLER_BASE = os.getenv("OZON_SELLER_BASE", "https://seller.ozon.ru")
-OZON_COOKIES_JSON = os.getenv("OZON_COOKIES_JSON")
-PLAYWRIGHT_HEADLESS = os.getenv("PLAYWRIGHT_HEADLESS", "1") in ("1","true","TRUE","yes")
-SLOWMO_MS = int(os.getenv("PLAYWRIGHT_SLOWMO_MS", "0"))
-
-URL_OWN_PROMO = os.getenv("OZON_OWN_PROMO_URL", f"{OZON_SELLER_BASE}/app/promo/own")
-
-NAV_TIMEOUT = int(os.getenv("PW_NAV_TIMEOUT_MS", "30000"))
-UI_TIMEOUT  = int(os.getenv("PW_UI_TIMEOUT_MS", "10000"))
-
-def _playwright_context(headless: bool = PLAYWRIGHT_HEADLESS):
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=headless, slow_mo=SLOWMO_MS)
-        context = browser.new_context(viewport={"width": 1400, "height": 900})
-        if OZON_COOKIES_JSON:
-            try:
-                cookies = json.loads(OZON_COOKIES_JSON)
-                if isinstance(cookies, list) and cookies:
-                    for c in cookies:
-                        if "domain" not in c:
-                            c["domain"] = ".ozon.ru"
-                    context.add_cookies(cookies)
-                    log.info("Загружены %d cookies из OZON_COOKIES_JSON", len(cookies))
-            except Exception as e:
-                log.warning("Не удалось прочитать OZON_COOKIES_JSON: %s", e)
-        try:
-            yield context
-        finally:
-            context.close()
-            browser.close()
 
 def _goto(page, url: str):
     log.info("Открываю: %s", url)
@@ -71,107 +34,206 @@ def _goto(page, url: str):
     except PWTimeout:
         pass
 
-def _open_promo(page, promo_name: str):
+
+def _open_promo(page, promo_name: str) -> bool:
+    """Открывает страницу акции по имени. Возвращает True при успехе."""
     _goto(page, URL_OWN_PROMO)
+    # Поиск по строке фильтра / поиску
     try:
-        # поиск по таблице / поиску
-        search = page.get_by_placeholder(re.compile("Поиск|Фильтр|Найти", re.I)).first
-        search.fill(promo_name)
-        time.sleep(0.2)
-    except Exception:
-        pass
-    row = page.get_by_text(promo_name, exact=True).first
-    row.click(timeout=UI_TIMEOUT)
-    page.wait_for_load_state("networkidle", timeout=8000)
-    try:
-        page.get_by_role("button", name=re.compile("Изменить|Редакт", re.I)).first.click(timeout=2000)
-    except Exception:
-        pass
-
-def _open_geo(page):
-    try:
-        page.get_by_role("button", name=re.compile("Географ|Регион|Город", re.I)).first.click(timeout=UI_TIMEOUT)
-    except Exception:
-        page.get_by_text(re.compile("Географ|Регион|Город", re.I)).first.click(timeout=UI_TIMEOUT)
-
-def _clear_regions(page):
-    # попробуем нажать «Очистить»
-    try:
-        page.get_by_role("button", name=re.compile("Очистить|Сбросить", re.I)).first.click(timeout=1500)
-    except Exception:
-        pass
-    # снять выбраные теги (если есть)
-    try:
-        chips = page.locator("[class*=chip]").locator("button").all()
-        for b in chips:
-            try: b.click(timeout=400)
-            except Exception: pass
-    except Exception:
-        pass
-
-def _select_region(page, reg: str):
-    try:
-        search = page.get_by_placeholder(re.compile("Поиск|Найти", re.I)).first
-        search.click(); search.fill(reg); time.sleep(0.2)
-    except Exception:
-        pass
-    loc = page.get_by_role("option", name=re.compile(rf"^{re.escape(reg)}$", re.I)).first
-    if not loc or not loc.is_visible():
-        loc = page.get_by_text(re.compile(rf"^{re.escape(reg)}$", re.I)).first
-    loc.click(timeout=UI_TIMEOUT)
-
-def _close_geo(page):
-    try:
-        page.get_by_role("button", name=re.compile("Готово|Выбрать|Закрыть", re.I)).first.click(timeout=1500)
-    except Exception:
-        page.mouse.click(50, 50)
-
-def _save(page):
-    for name in ("Сохранить", "Применить", "Сохранить изменения"):
-        try:
-            page.get_by_role("button", name=re.compile(name, re.I)).first.click(timeout=UI_TIMEOUT)
+        # Поищем любой понятный плейсхолдер
+        search = None
+        for placeholder in ("Поиск", "Фильтр", "Найти", "Название акции"):
             try:
-                page.wait_for_load_state("networkidle", timeout=8000)
-            except PWTimeout:
+                search = page.get_by_placeholder(placeholder)
+                if search and search.count():
+                    search = search.first
+                    break
+            except Exception:
+                continue
+        if search:
+            search.click()
+            search.fill(promo_name)
+            time.sleep(0.3)
+        else:
+            log.info("Поле поиска не найдено, пробую найти акцию кликом по тексту")
+
+        # Клик по строке таблицы
+        page.locator(f"text={promo_name}").first.click(timeout=8000)
+        log.info("Акция '%s' открыта", promo_name)
+        return True
+    except Exception as e:
+        log.error("Не удалось открыть акцию '%s': %s", promo_name, e)
+        return False
+
+
+def _open_geo_tab(page) -> bool:
+    """Открывает вкладку 'География'. Возвращает True при успехе."""
+    try:
+        # Иногда это именно вкладка с текстом "География"
+        page.locator("text=География").first.click(timeout=6000)
+        time.sleep(0.3)
+        return True
+    except Exception:
+        # Иногда это секция/кнопка где-то в настройках
+        try:
+            page.get_by_text("География").first.click(timeout=6000)
+            time.sleep(0.3)
+            return True
+        except Exception as e:
+            log.error("Не удалось открыть вкладку 'География': %s", e)
+            return False
+
+
+def _read_current_regions(page) -> List[str]:
+    """Собирает текущие выбранные регионы из UI (насколько это возможно)."""
+    regions = []
+    try:
+        # Часто выбранные регионы отображаются как теги или элементы списка
+        candidates = [
+            "div:has-text('Регион') >> .. >> span",  # эвристика
+            "[data-testid='selected-region']",
+            "div.tag, div.chips, span.tag, span.chip",
+        ]
+        for css in candidates:
+            try:
+                loc = page.locator(css)
+                n = loc.count()
+                if n:
+                    for i in range(min(n, 200)):
+                        txt = (loc.nth(i).inner_text() or "").strip()
+                        if txt and len(txt) < 80 and txt not in regions:
+                            regions.append(txt)
+            except Exception:
+                continue
+    except Exception as e:
+        log.warning("Не удалось прочитать текущие регионы: %s", e)
+    return regions
+
+
+def _set_regions(page, regions: List[str]) -> None:
+    """Сбрасывает и устанавливает указанные регионы в UI."""
+    # 1) Сначала очистка
+    try:
+        # массовый сброс, если есть
+        for txt in ("Очистить", "Сбросить", "Удалить все"):
+            btns = page.get_by_role("button", name=txt)
+            if btns and btns.count():
+                btns.first.click()
+                time.sleep(0.2)
+                break
+    except Exception:
+        pass
+
+    try:
+        # точечное удаление выбранных
+        clear_btns = page.locator("button:has-text('Удалить')")
+        cnt = clear_btns.count()
+        for i in range(cnt):
+            try:
+                clear_btns.nth(i).click()
+            except Exception:
                 pass
+        if cnt:
+            log.info("Удалено %d ранее выбранных регионов", cnt)
+    except Exception:
+        pass
+
+    # 2) Добавляем новые
+    for region in regions:
+        added = False
+        for placeholder in ("Поиск регионов", "Поиск", "Регион", "Выберите регион"):
+            try:
+                fld = page.get_by_placeholder(placeholder)
+                if fld and fld.count():
+                    fld = fld.first
+                    fld.click()
+                    fld.fill(region)
+                    time.sleep(0.25)
+                    page.locator(f"text={region}").first.click(timeout=5000)
+                    added = True
+                    break
+            except Exception:
+                continue
+        if not added:
+            # запасной путь: попробуем искать чекбокс с этим текстом
+            try:
+                page.get_by_label(region).check()
+                added = True
+            except Exception:
+                pass
+        if added:
+            log.info("Добавлен регион: %s", region)
+        else:
+            log.warning("Не удалось добавить регион: %s", region)
+
+    # 3) Сохранить
+    for btn_text in ("Сохранить", "Применить"):
+        try:
+            page.get_by_role("button", name=btn_text).first.click(timeout=4000)
+            time.sleep(0.3)
             return
         except Exception:
             continue
+    log.warning("Кнопка сохранения не найдена — проверьте селекторы")
 
-def get_current_regions(page) -> list[str]:
-    regs = []
-    try:
-        chips = page.locator("[class*=chip]").all()
-        for c in chips:
-            t = (c.text_content() or "").strip()
-            if t: regs.append(t)
-    except Exception:
-        pass
-    return regs
 
-def upsert_promo_geography(promo_name: str, regions: Iterable[str], headless: Optional[bool]=None) -> str:
-    if headless is None:
-        headless = PLAYWRIGHT_HEADLESS
-    regions = sorted({r.strip() for r in regions if r and r.strip()})
-    if not regions:
-        return "error"
+def upsert_promo(promo_name: str, regions: List[str], dry_run: bool = False) -> None:
+    """
+    Обновляет (upsert) географию акции по имени promo_name.
+    regions — список строк регионов (на русский), например:
+        ["Москва, МО и Дальние регионы", "Новосибирск и Сибирь"]
+    Если dry_run=True — только логируем действия.
+    """
+    if dry_run:
+        log.info("🧪 DRY-RUN: '%s' → (%d регионов) %s", promo_name, len(regions), ", ".join(regions))
+        return
+
+    prev = os.environ.get("PLAYWRIGHT_HEADLESS")
+    os.environ["PLAYWRIGHT_HEADLESS"] = "1"  # headless обязателен на Railway/Docker
     try:
-        with _playwright_context(headless=headless) as ctx:
-            page = ctx.new_page()
-            _open_promo(page, promo_name)
-            _open_geo(page)
-            current = sorted(get_current_regions(page))
-            if current == regions:
-                return "skipped"
-            _clear_regions(page)
-            for r in regions:
-                try:
-                    _select_region(page, r)
-                except Exception as e:
-                    log.warning("Не выбрал регион '%s': %s", r, e)
-            _close_geo(page)
-            _save(page)
-            return "updated"
-    except Exception as e:
-        log.error("Ошибка upsert '%s': %s", promo_name, e)
-        return "error"
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
+            )
+            context = browser.new_context()
+            _apply_cookies_if_any(context)
+            page = context.new_page()
+
+            # 1) заходим на главную, прогреваем сессию
+            _goto(page, URL_ROOT)
+
+            # 2) открываем акцию
+            if not _open_promo(page, promo_name):
+                raise RuntimeError(f"Акция '{promo_name}' не найдена/не открылась")
+
+            # 3) открываем Географию
+            if not _open_geo_tab(page):
+                raise RuntimeError("Вкладка 'География' не найдена")
+
+            # 4) читаем текущие регионы и сравниваем
+            current = _read_current_regions(page)
+            need_set = sorted(set(regions))
+            to_apply = need_set
+
+            if current:
+                cur_norm = sorted(set([c.strip() for c in current if c and c.strip()]))
+                if cur_norm == need_set:
+                    log.info("География '%s' уже корректная. Изменений не требуется.", promo_name)
+                    context.close()
+                    browser.close()
+                    return
+                else:
+                    log.info("Текущие регионы: %s", ", ".join(cur_norm))
+
+            # 5) выставляем регионы
+            _set_regions(page, to_apply)
+
+            context.close()
+            browser.close()
+            log.info("✅ Акция '%s' обновлена (регионов: %d)", promo_name, len(to_apply))
+    finally:
+        if prev is None:
+            os.environ.pop("PLAYWRIGHT_HEADLESS", None)
+        else:
+            os.environ["PLAYWRIGHT_HEADLESS"] = prev
