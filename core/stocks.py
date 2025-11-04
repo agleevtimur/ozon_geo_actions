@@ -79,7 +79,7 @@ def ensure_id_map(*, fetch_warehouses_func, force: bool = False) -> int:
         return len(WAREHOUSE_ID_TO_CLUSTER)
 
 def get_warehouses_via_clusters() -> List[dict]:
-    payload = {"limit": 1000, "offset": 0}
+    payload = {"cluster_type": "CLUSTER_TYPE_OZON"}
     resp = post("/v1/cluster/list", payload)
     out: List[dict] = []
     for c in resp.get("clusters", []) or []:
