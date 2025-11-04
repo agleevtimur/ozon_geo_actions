@@ -19,7 +19,7 @@ def apply_geo_for_group(group: str) -> str:
     clusters = sorted({c for arr in agg.values() for c in arr})
     if not clusters:
         return f"• {promo_name} ({group}) — нет остатков"
-    status = upsert_promo_geography(promo_name, clusters)
+    status = upsert_promo(promo_name, clusters)
     if status == "skipped":
         return f"⚪ {promo_name} ({group}) — уже актуальна ({len(clusters)} регионов)"
     elif status == "updated":
