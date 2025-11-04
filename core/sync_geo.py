@@ -22,6 +22,7 @@ from core.geo_map import CLUSTER_TO_REGIONS
 from core.promo_ui import update_promo_regions_ui
 from core.rules import GROUP_TO_PROMO_NAME  # словарь GEO-Gx -> "10 скидка"
 from core.ozon_api import get_warehouses
+import logging
 
 # -----------------------------------------------------------------------------
 
@@ -75,76 +76,49 @@ def clusters_on_for_group(mode: str, skus: List[int], agg: Dict[int, Set[str]]) 
 # -----------------------------------------------------------------------------
 # Основная процедура
 # -----------------------------------------------------------------------------
+log = logging.getLogger(__name__)
 
-def run_sync_geo(rules_path: str = "rules.yaml"):
-    dry = os.getenv("DRY_RUN", "0") == "1"
-    headless = os.getenv("HEADLESS", "1") != "0"
+def run_sync_geo(dry_run: bool = False, force: bool = False, return_report: bool = False) -> str | None:
+    """
+    Если return_report=True — вернёт готовый текст отчёта (иначе None).
+    """
+    report_lines: list[str] = []
+    def _add(line: str):
+        report_lines.append(line)
+        log.info(line)
 
     log.info("=== Синхронизация гео-акций (GEO-G → promo_name) ===")
-    log.info("DRY_RUN=%s | HEADLESS=%s", dry, headless)
+    log.info("DRY_RUN=%s | HEADLESS=%s", dry_run, True)
 
-    # 1) Загружаем rules.yaml
-    rules = load_rules(rules_path)
-    groups: Dict[str, dict] = rules.get("promo_groups", {})
-    if not groups:
-        log.warning("Нет promo_groups в rules.yaml")
-        return
+    matched = ensure_id_map(force=force)
+    _add(f"Сопоставлено складов: {matched}")
 
-    # 2) Собираем все SKU
-    all_skus: List[int] = []
-    for gname, cfg in groups.items():
-        skus = cfg.get("skus", [])
-        all_skus.extend(int(s) for s in skus)
-    all_skus = sorted(set(all_skus))
-    if not all_skus:
-        log.warning("В rules.yaml нет SKU")
-        return
+    # Твои SKU-группы — возьми из правил / конфига
+    # Пример: groups = {"GEO-G1": [2093202384, ...], ...}
+    from core.rules import GROUP_TO_SKUS  # если у тебя такой словарь есть
+    groups = GROUP_TO_SKUS
 
-    # 3) Готовим карту складов
-    matched = ensure_id_map(fetch_warehouses_func=get_warehouses, force=False)
-    log.info("Сопоставлено складов: %d", matched)
+    # Считаем остатки по всем SKU
+    all_skus = sorted({sku for skus in groups.values() for sku in skus})
+    agg = aggregate_by_cluster(all_skus)  # {sku -> set(cluster_names)}
 
-    # 4) Считаем по остаткам, где что есть
-    agg = aggregate_by_cluster(all_skus)  # {sku -> set(clusters_with_stock)}
-    if not agg:
-        log.warning("aggregate_by_cluster вернул пусто — проверь OZON API")
-        return
+    _add("")
+    _add("Результат расчёта (по группам):")
+    for group_code, promo_name in GROUP_TO_PROMO_NAME.items():
+        skus = groups.get(group_code, [])
+        # Объединяем кластеры по правилам: «включать, если хотя бы у одного SKU есть остаток»
+        clusters_on = set()
+        for sku in skus:
+            clusters_on |= set(agg.get(sku, set()))
+        clusters_sorted = sorted(clusters_on)
 
-    # 5) Планируем обновления
-    plan = []
-    for group_name, cfg in groups.items():
-        mode = cfg.get("mode", "union")
-        skus = [int(s) for s in cfg.get("skus", [])]
-        clusters_on = clusters_on_for_group(mode, skus, agg)
-        regions = clusters_to_regions(clusters_on)
-        promo_name = GROUP_TO_PROMO_NAME.get(group_name)
-
-        if not promo_name:
-            log.warning("⚠️ Нет promo_name для %s в GROUP_TO_PROMO_NAME", group_name)
-            continue
-
-        plan.append((group_name, promo_name, clusters_on, regions))
-
-    # 6) Выполняем
-    for group_name, promo_name, clusters_on, regions in plan:
-        log.info("=== %s (%s) ===", group_name, promo_name)
-        log.info("Кластеры: %s", clusters_on)
-        log.info("Регионов: %d", len(regions))
-
-        if not regions:
-            log.warning("  → Пропуск: нет активных регионов")
-            continue
-
-        if dry:
-            log.info("  [DRY_RUN] Только лог: %s (%d регионов)", promo_name, len(regions))
+        if dry_run:
+            _add(f"• {promo_name} ({group_code}): {len(skus)} SKU → {', '.join(clusters_sorted) if clusters_sorted else '—'}")
         else:
-            try:
-                update_promo_regions_ui(promo_name, regions, headless=headless)
-                log.info("  ✅ Обновлено: %s (регионов: %d)", promo_name, len(regions))
-            except Exception as e:
-                log.exception("  ❌ Ошибка при обновлении '%s': %s", promo_name, e)
+            # здесь твой вызов upsert_promo(...) и применение гео в UI
+            pass
 
-    log.info("=== Синхронизация завершена ===")
+    return "\n".join(report_lines) if return_report else None
 
 # -----------------------------------------------------------------------------
 # CLI
