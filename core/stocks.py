@@ -160,13 +160,15 @@ def build_id_map(warehouses: list[dict], persist: bool = True) -> int:
     if persist and matched:
         _save_cache()
     return matched
-    
-def ensure_id_map(fetch_warehouses_func: Callable[[], List[dict]] | None = None) -> int:
+
+def ensure_id_map(fetch_warehouses_func: Optional[Callable[[], List[dict]]] = None, *, force: bool = False) -> int:
     """
     Обеспечить наличие актуального ID→кластер.
+
     1) Если force=True — всегда тянем из API и перезаписываем кэш.
     2) Если кэш свежий — грузим из файла и НЕ звоним в API.
     3) Если кэш старый/пустой — звоним в API и сохраняем на диск.
+
     Возвращает число сопоставленных складов.
     """
     # если уже есть в памяти и не принудительно — используем
@@ -180,17 +182,16 @@ def ensure_id_map(fetch_warehouses_func: Callable[[], List[dict]] | None = None)
     # иначе — обновляем из API
     try:
         if fetch_warehouses_func is None:
-            # ленивый импорт, чтобы не ловить циклические зависимости
+            # ленивый импорт, чтобы избежать циклов
             from core.ozon_api import get_warehouses
             fetch_warehouses_func = get_warehouses
 
         warehouses = fetch_warehouses_func() or []
         return build_id_map(warehouses, persist=True)
     except Exception:
-        # как fallback попытаемся хотя бы загрузить старый кэш
+        # fallback — хотя бы поднимем старый кэш
         _load_cache()
         return len(WAREHOUSE_ID_TO_CLUSTER)
-
 
 def _cluster_by_id(wh_id) -> Optional[str]:
     try:
