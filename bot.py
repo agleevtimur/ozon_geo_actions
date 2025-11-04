@@ -321,19 +321,21 @@ async def debug_stocks(update, context):
 
 # /dry_sync_geo — только лог, без кликов в UI
 async def dry_sync_geo(update, context):
-    await update.message.reply_text("Запускаю dry-run синхронизации гео…")
-    loop = asyncio.get_running_loop()
     try:
-        func = functools.partial(run_sync_geo, "rules.yaml")
-        # DRY_RUN=1, HEADLESS=1 (по умолчанию)
-        with TempEnv(DRY_RUN="1"):
-            await loop.run_in_executor(None, func)
-        await update.message.reply_text("✅ Dry-run завершён. Смотри логи Railway.")
+        await update.message.reply_text("⚙️ Запускаю dry-run синхронизации гео-акций…")
+        loop = asyncio.get_event_loop()
+        # вернём текст отчёта из воркера
+        func = functools.partial(run_sync_geo, dry_run=True, force=False, return_report=True)
+        report: str | None = await loop.run_in_executor(None, func)
+
+        if report:
+            await _send_long(update.message.chat, "✅ Dry-run завершён.\n\n" + report)
+        else:
+            await update.message.reply_text("✅ Dry-run завершён (но отчёт пуст). Смотри логи Railway.")
     except Exception as e:
         tb = traceback.format_exc()
-        msg = f"❌ Ошибка dry-run: {e}\n\n{tb}"
-        await update.message.reply_text(msg[:4000])  # чтобы Telegram не обрезал
-        print(tb)  # чтобы ушло и в Railway-логи
+        await update.message.reply_text(f"❌ Ошибка dry-run: {e}\n\n{tb}"[:4000])
+        print(tb)
 
 # /sync_geo — реальный апдейт географии через UI
 async def sync_geo_cmd(update, context):
