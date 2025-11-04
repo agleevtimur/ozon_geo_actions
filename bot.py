@@ -56,6 +56,21 @@ if not os.path.exists("cookies.json") and os.getenv("COOKIES_JSON"):
     except Exception as e:
         log.warning(f"Failed to create cookies.json from env: {e}")
 
+MAX_TG = 4096
+
+async def _send_long(chat, text: str):
+    # бьём по строкам, чтобы не резать слова
+    chunk = []
+    size = 0
+    for line in text.splitlines(keepends=True):
+        if size + len(line) > 3500:  # немного запас, чтобы не врезаться в 4096
+            await chat.send_message("".join(chunk))
+            chunk, size = [], 0
+        chunk.append(line)
+        size += len(line)
+    if chunk:
+        await chat.send_message("".join(chunk))
+        
 def admin_only(func):
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
