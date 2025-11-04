@@ -101,7 +101,7 @@ def run_sync_geo(rules_path: str = "rules.yaml"):
         return
 
     # 3) Готовим карту складов
-    matched = ensure_id_map()
+    matched = ensure_id_map(fetch_warehouses_func=get_warehouses)
     log.info("Сопоставлено складов: %d", matched)
 
     # 4) Считаем по остаткам, где что есть
