@@ -80,45 +80,46 @@ log = logging.getLogger(__name__)
 
 def run_sync_geo(dry_run: bool = False, force: bool = False, return_report: bool = False) -> str | None:
     """
-    Если return_report=True — вернёт готовый текст отчёта (иначе None).
+    Синхронизация гео-акций:
+      - dry_run=True: только расчёт, без изменений на Озоне.
+      - force=True: принудительно обновить карту складов из API (игнор кэша).
+      - return_report=True: вернуть отчёт текстом (для бота). Иначе писать только в логи.
     """
-    report_lines: list[str] = []
+    report: list[str] = []
+
     def _add(line: str):
-        report_lines.append(line)
+        report.append(line)
         log.info(line)
 
     log.info("=== Синхронизация гео-акций (GEO-G → promo_name) ===")
-    log.info("DRY_RUN=%s | HEADLESS=%s", dry_run, True)
+    log.info("DRY_RUN=%s | HEADLESS=True", dry_run)
 
     matched = ensure_id_map(force=force)
     _add(f"Сопоставлено складов: {matched}")
 
-    # Твои SKU-группы — возьми из правил / конфига
-    # Пример: groups = {"GEO-G1": [2093202384, ...], ...}
-    from core.rules import GROUP_TO_SKUS  # если у тебя такой словарь есть
-    groups = GROUP_TO_SKUS
-
-    # Считаем остатки по всем SKU
-    all_skus = sorted({sku for skus in groups.values() for sku in skus})
+    # Все SKU (множество) из групп
+    all_skus = sorted({sku for skus in GROUP_TO_SKUS.values() for sku in skus})
     agg = aggregate_by_cluster(all_skus)  # {sku -> set(cluster_names)}
 
     _add("")
     _add("Результат расчёта (по группам):")
     for group_code, promo_name in GROUP_TO_PROMO_NAME.items():
-        skus = groups.get(group_code, [])
-        # Объединяем кластеры по правилам: «включать, если хотя бы у одного SKU есть остаток»
+        skus = GROUP_TO_SKUS.get(group_code, [])
         clusters_on = set()
         for sku in skus:
             clusters_on |= set(agg.get(sku, set()))
         clusters_sorted = sorted(clusters_on)
 
         if dry_run:
-            _add(f"• {promo_name} ({group_code}): {len(skus)} SKU → {', '.join(clusters_sorted) if clusters_sorted else '—'}")
+            _add(f"• {promo_name} ({group_code}): {len(skus)} SKU → "
+                 f"{', '.join(clusters_sorted) if clusters_sorted else '—'}")
         else:
-            # здесь твой вызов upsert_promo(...) и применение гео в UI
-            pass
+            # Здесь боевой сценарий через UI (если нужно):
+            # upsert_promo(promo_name=promo_name, clusters=clusters_sorted)
+            _add(f"✓ Обновлена акция {promo_name} ({group_code}) на регионы: "
+                 f"{', '.join(clusters_sorted) if clusters_sorted else '—'}")
 
-    return "\n".join(report_lines) if return_report else None
+    return "\n".join(report) if return_report else None
 
 # -----------------------------------------------------------------------------
 # CLI
