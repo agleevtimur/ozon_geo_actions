@@ -4,7 +4,7 @@ from pathlib import Path
 import json
 import time
 import re
-from typing import Dict, List, Optional
+from typing import Callable, List, Dict
 from collections import defaultdict
 from core.warehouses_map import WAREHOUSE_NAME_TO_CLUSTER
 
@@ -161,7 +161,7 @@ def build_id_map(warehouses: list[dict], persist: bool = True) -> int:
         _save_cache()
     return matched
     
-def ensure_id_map(fetch_warehouses_func, force: bool = False) -> int:
+def ensure_id_map(fetch_warehouses_func: Callable[[], List[dict]] | None = None) -> int:
     """
     Обеспечить наличие актуального ID→кластер.
     1) Если force=True — всегда тянем из API и перезаписываем кэш.
@@ -179,7 +179,12 @@ def ensure_id_map(fetch_warehouses_func, force: bool = False) -> int:
 
     # иначе — обновляем из API
     try:
-        warehouses = fetch_warehouses_func()  # ожидаем список dict'ов
+        if fetch_warehouses_func is None:
+            # ленивый импорт, чтобы не ловить циклические зависимости
+            from core.ozon_api import get_warehouses
+            fetch_warehouses_func = get_warehouses
+
+        warehouses = fetch_warehouses_func() or []
         return build_id_map(warehouses, persist=True)
     except Exception:
         # как fallback попытаемся хотя бы загрузить старый кэш
