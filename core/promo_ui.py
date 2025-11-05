@@ -11,8 +11,34 @@ log = logging.getLogger("core.promo_ui")
 URL_ROOT = "https://seller.ozon.ru/"
 URL_OWN_PROMO = "https://seller.ozon.ru/app/highlights/my-highlights/list"
 NAV_TIMEOUT = 35000
-SS_DIR = os.environ.get("PW_DEBUG_DIR", "/tmp")
+# === КУДА СКЛАДЫВАТЬ СКРИНЫ ===
+# приоритет: переменная окружения PW_DEBUG_DIR, иначе /app/screens
+SS_DIR = os.environ.get("PW_DEBUG_DIR", "/app/screens")
+os.makedirs(SS_DIR, exist_ok=True)
 
+def _cleanup_old_screens(max_keep: int = 60):
+    """Держим в каталоге только последние max_keep скринов, чтобы не разрасталось."""
+    try:
+        files = [os.path.join(SS_DIR, f) for f in os.listdir(SS_DIR) if f.endswith(".png")]
+        files.sort(key=os.path.getmtime, reverse=True)
+        for f in files[max_keep:]:
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+def _ss(page, name: str):
+    """Делаем полноразмерный скрин и логируем путь."""
+    try:
+        fname = f"{int(time.time())}_{name}.png"
+        path = os.path.join(SS_DIR, fname)
+        page.screenshot(path=path, full_page=True)
+        logging.getLogger("core.promo_ui").info("Скриншот: %s", path)
+        _cleanup_old_screens()
+    except Exception:
+        pass
 
 def _apply_cookies_if_any(context):
     """Подхватывает ozon_cookies.json, если он есть рядом с проектом."""
