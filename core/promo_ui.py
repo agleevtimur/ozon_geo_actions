@@ -3,7 +3,7 @@ import json
 import time
 import logging
 from typing import List
-
+import base64
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 log = logging.getLogger("core.promo_ui")
@@ -11,34 +11,39 @@ log = logging.getLogger("core.promo_ui")
 URL_ROOT = "https://seller.ozon.ru/"
 URL_OWN_PROMO = "https://seller.ozon.ru/app/highlights/my-highlights/list"
 NAV_TIMEOUT = 35000
-# === КУДА СКЛАДЫВАТЬ СКРИНЫ ===
-# приоритет: переменная окружения PW_DEBUG_DIR, иначе /app/screens
-SS_DIR = os.environ.get("PW_DEBUG_DIR", "/app/screens")
-os.makedirs(SS_DIR, exist_ok=True)
 
-def _cleanup_old_screens(max_keep: int = 60):
-    """Держим в каталоге только последние max_keep скринов, чтобы не разрасталось."""
+def _log_base64_png(path: str, tag: str) -> None:
+    """Печатает png в лог как base64 (кусочками, чтобы не порезало по длине строки)."""
     try:
-        files = [os.path.join(SS_DIR, f) for f in os.listdir(SS_DIR) if f.endswith(".png")]
-        files.sort(key=os.path.getmtime, reverse=True)
-        for f in files[max_keep:]:
-            try:
-                os.remove(f)
-            except Exception:
-                pass
-    except Exception:
-        pass
+        with open(path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        # чтобы логи были читаемы и не обрезались, режем на куски ~7k символов
+        chunk = 7000
+        log.info("=== SCREENSHOT:%s:BEGIN ===", tag)
+        for i in range(0, len(b64), chunk):
+            log.info("SS:%s:%05d-%05d %s", tag, i, min(i+chunk, len(b64)), b64[i:i+chunk])
+        log.info("=== SCREENSHOT:%s:END ===", tag)
+    except Exception as e:
+        log.warning("Не удалось вывести скриншот в лог (%s): %s", tag, e)
 
-def _ss(page, name: str):
-    """Делаем полноразмерный скрин и логируем путь."""
+def _ss(page, tag: str) -> str:
+    """
+    Делает скрин и:
+      1) сохраняет файл в /app/screens
+      2) дублирует в логи base64 (если LOG_BASE64_SCREENS=1)
+    Возвращает путь к файлу.
+    """
+    out_dir = "/app/screens"
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, f"{int(time.time())}_{tag}.png")
     try:
-        fname = f"{int(time.time())}_{name}.png"
-        path = os.path.join(SS_DIR, fname)
         page.screenshot(path=path, full_page=True)
-        logging.getLogger("core.promo_ui").info("Скриншот: %s", path)
-        _cleanup_old_screens()
-    except Exception:
-        pass
+        log.info("Скриншот: %s", path)
+        if os.getenv("LOG_BASE64_SCREENS", "1") == "1":
+            _log_base64_png(path, tag)
+    except Exception as e:
+        log.warning("Не удалось сделать скриншот (%s): %s", tag, e)
+    return path
 
 def _apply_cookies_if_any(context):
     """Подхватывает ozon_cookies.json, если он есть рядом с проектом."""
