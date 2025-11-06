@@ -11,6 +11,12 @@ HEADERS_BASE = {
     "x-o3-page-type": "highlights-other",
     "x-o3-company-id": OZON_COMPANY_ID,
     "Accept": "application/json, text/plain, */*",
+    "Origin": "https://seller.ozon.ru",
+    "Priority": "u=3, i",
+    "Sec-Fetch-Dest": "empty"
+    "Sec-Fetch-Mode": "cors"
+    "Sec-Fetch-Site": "same-origin"
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15"
 }
 
 class OzonClient:
