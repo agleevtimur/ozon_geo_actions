@@ -66,4 +66,5 @@ def _extract_uid(d: Dict[str, Any]) -> Optional[str]:
     v = _get_first(d, UID_KEYS)
     return str(v).strip() if v is not None else None
 
-def _extract
+def _extract(d: dict) -> str:
+    return d.get("name", "").strip()
