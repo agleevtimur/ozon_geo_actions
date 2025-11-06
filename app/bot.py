@@ -7,6 +7,7 @@ import sys
 from app.ozon_client import OzonClient
 from app.geo_mapping import GeoResolver
 from app.config import ACTIONS
+from telegram.ext import ApplicationBuilder
 
 
 logging.basicConfig(
@@ -18,7 +19,15 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-async def cmd_update_geo(update, context):
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+ALLOWED_IDS = {i.strip() for i in os.getenv("TG_ALLOWED_USER_IDS", "").split(",") if i.strip()}
+
+def _allowed(user_id):
+    if not ALLOWED_IDS:
+        return True
+    return user_id and str(user_id) in ALLOWED_IDS
+
+async def update_geo(update, context):
     """
     /update_geo <название_акции>
     1) Берём action_id и skus из config.ACTIONS[<name>]
@@ -125,7 +134,12 @@ async def cmd_update_geo(update, context):
     )
 
 
-def register_handlers(application):
-    """Вызови из инициализации бота, чтобы повесить команду."""
-    from telegram.ext import CommandHandler
-    application.add_handler(CommandHandler("update_geo", cmd_update_geo))
+def main():
+    if not BOT_TOKEN:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("update_geo", update_geo))
+    application.run_polling(close_loop=False)
+
+if __name__ == "__main__":
+    main()
