@@ -1,70 +1,53 @@
-# app/geo_mapping.py
-from __future__ import annotations
 import json
 import os
-from typing import Any, Dict, List, Optional, Tuple, Iterable
-import logging
-import unicodedata
 
-log = logging.getLogger(__name__)
+class GeoResolver:
+    """Простой загрузчик geo.json с готовой структурой country/regions/cities."""
 
-def _norm(s: str) -> str:
-    return unicodedata.normalize("NFKC", s).strip().lower()
+    def __init__(self, path: str | None = None):
+        self.path = path or os.getenv("GEO_JSON_PATH", "/app/data/geo.json")
+        self.country = None
+        self.regions = {}
+        self.cities = {}
+        self._load()
 
-# Варианты ключей, которые могут встретиться в «сыром» geo.json
-TYPE_KEYS = ["type", "nodeType", "level", "kind", "address_type", "category"]
-UID_KEYS  = ["uid", "id", "uuid", "guid", "addressUid", "address_uid", "code"]
-NAME_KEYS = ["name", "title", "label", "text", "address", "fullName"]
-CHILD_KEYS = ["children", "items", "regions", "cities", "nodes", "elements", "data"]
+    def _load(self):
+        if not os.path.exists(self.path):
+            raise FileNotFoundError(f"geo.json not found at {self.path}")
 
-PARENT_KEYS = ["parentUid", "parent_uid", "parentId", "parent_id", "parent", "regionUid", "region_uid"]
+        with open(self.path, "r", encoding="utf-8") as f:
+            data = json.load(f)
 
-# Русские и английские эвристики типов
-def _classify_type(raw: Optional[str]) -> Optional[str]:
-    if not raw:
-        return None
-    t = _norm(raw)
-    # «город»
-    if any(k in t for k in ["city", "город"]):
-        return "city"
-    # «регион»
-    if any(k in t for k in ["region", "область", "край", "республика", "округ", "ao", "ао"]):
-        return "region"
-    # «страна»
-    if any(k in t for k in ["country", "страна"]):
-        return "country"
-    # Иногда уровень задают числами
-    if t in {"0", "root"}:
-        return "country"
-    if t in {"1", "region", "admin1"}:
-        return "region"
-    if t in {"2", "city", "admin2", "settlement"}:
-        return "city"
-    return None
+        if "regions" not in data:
+            raise RuntimeError("geo.json missing 'regions' key")
 
-def _get_first(d: Dict[str, Any], keys: Iterable[str]) -> Optional[Any]:
-    for k in keys:
-        if k in d and d[k] not in (None, ""):
-            return d[k]
-    return None
+        self.country = data.get("country", {})
+        for region in data["regions"]:
+            rname = region["name"].strip()
+            self.regions[rname] = region["uid"]
+            for city in region.get("cities", []):
+                cname = city["name"].strip()
+                self.cities[cname] = city["uid"]
 
-def _children_of(d: Dict[str, Any]) -> List[Any]:
-    out: List[Any] = []
-    for k in CHILD_KEYS:
-        v = d.get(k)
-        if isinstance(v, list):
-            out.extend(v)
-        elif isinstance(v, dict):
-            out.append(v)
-    return out
+        if not self.regions:
+            raise RuntimeError("No regions found in geo.json")
 
-def _extract_name(d: Dict[str, Any]) -> Optional[str]:
-    v = _get_first(d, NAME_KEYS)
-    return str(v).strip() if v is not None else None
+    def get_country_uid(self) -> str | None:
+        return self.country.get("uid")
 
-def _extract_uid(d: Dict[str, Any]) -> Optional[str]:
-    v = _get_first(d, UID_KEYS)
-    return str(v).strip() if v is not None else None
+    def get_region_uid(self, name: str) -> str | None:
+        """Поиск UID региона по названию."""
+        return self.regions.get(name.strip())
 
-def _extract(d: dict) -> str:
-    return d.get("name", "").strip()
+    def get_city_uid(self, name: str) -> str | None:
+        """Поиск UID города по названию."""
+        return self.cities.get(name.strip())
+
+    def resolve(self, name: str) -> str | None:
+        """Возвращает UID по названию города или региона."""
+        return self.cities.get(name.strip()) or self.regions.get(name.strip())
+
+
+if __name__ == "__main__":
+    geo = GeoResolver()
+    print(f"✅ Loaded {len(geo.regions)} regions, {len(geo.cities)} cities")
