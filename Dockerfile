@@ -1,5 +1,5 @@
 # База со всеми зависимостями и браузерами
-FROM mcr.microsoft.com/playwright/python:v1.49.0-jammy
+FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
