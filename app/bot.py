@@ -1,40 +1,59 @@
 import os
+import sys
 import json
 import logging
 import requests
-import sys
+from typing import Any, Dict, List
 
-from app.ozon_client import OzonClient
-from app.geo_mapping import GeoResolver
+from telegram.ext import ApplicationBuilder, CommandHandler
+
 from app.config import ACTIONS
-from telegram.ext import Application, CommandHandler
+from app.geo_mapping import GeoResolver
+from app.ozon_openapi import OzonOpenApi
+from app.ozon_client import OzonClient  # UI-домен с куками (seller.ozon.ru)
 
-
+# базовое логирование в stdout
 logging.basicConfig(
-    level=logging.INFO,                        # можно DEBUG для подробностей
+    level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    datefmt="%H:%M:%S",
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
-
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-ALLOWED_IDS = {i.strip() for i in os.getenv("TG_ALLOWED_USER_IDS", "").split(",") if i.strip()}
 
-def _allowed(user_id):
-    if not ALLOWED_IDS:
-        return True
-    return user_id and str(user_id) in ALLOWED_IDS
+def _extract_items_from_openapi(resp: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Нормализуем ответ OpenAPI по /v1/analytics/stocks:
+    возвращаем список items, где у каждого ожидаем:
+      sku, cluster_name, available_stock_count
+    """
+    items = (
+        resp.get("result")
+        or resp.get("items")
+        or resp.get("data")
+        or (resp.get("result", {}) or {}).get("items")
+        or []
+    )
+    if not isinstance(items, list):
+        logger.warning("Unexpected stocks payload: keys=%s", list(resp.keys()))
+        return []
+    return items
 
-async def update_geo(update, context):
+
+def _load_cluster_mapping(mapping_path: str) -> Dict[str, List[str]]:
+    with open(mapping_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return {row["cluster"]: row["regions"] for row in data}
+
+
+async def cmd_update_geo(update, context):
     """
     /update_geo <название_акции>
-    1) Берём action_id и skus из config.ACTIONS[<name>]
-    2) Тянем остатки через /v1/analytics/stocks
-    3) По cluster_name → regions (из data/cluster_regions.json)
-    4) Переводим regions → addresses (uid региона + uid всех его городов)
-    5) POST /api/site/marketplace-seller-actions/v1/action/{id}/update
+      1) action_id, skus из config.ACTIONS
+      2) stocks = OzonOpenApi.fetch_stocks_for_skus(skus)
+      3) union регионов через соответствие cluster_name -> regions (cluster_regions.json)
+      4) regions -> addresses (GeoResolver)
+      5) POST https://seller.ozon.ru/api/site/marketplace-seller-actions/v1/action/{id}/update
     """
     if not context.args:
         await update.message.reply_text("Формат: /update_geo <название_акции>")
@@ -45,47 +64,39 @@ async def update_geo(update, context):
         await update.message.reply_text(f"Акция «{action_name}» не найдена в config.ACTIONS")
         return
 
-    action_info = ACTIONS[action_name]
-    action_id = int(action_info["id"])
-    skus = [str(x) for x in action_info.get("skus", [])]
+    cfg = ACTIONS[action_name]
+    action_id = int(cfg["id"])
+    skus = [str(x) for x in cfg.get("skus", [])]
     if not skus:
         await update.message.reply_text("В акции нет SKU в config.ACTIONS")
         return
 
-    # 1) Ozon клиент
-    client = OzonClient()
-
-    # 2) Остатки по /v1/analytics/stocks
-    url_stocks = f"{client.base}/v1/analytics/stocks"
-    body = {"limit": 1000, "offset": 0, "skus": skus}
-    rs = client.sess.post(url_stocks, json=body, timeout=60)
-    try:
-        rs.raise_for_status()
-    except requests.HTTPError:
-        await update.message.reply_text(f"Ошибка stocks: {rs.status_code} {rs.text}")
-        return
-
-    rj = rs.json()
-    items = (
-        rj.get("result")
-        or rj.get("items")
-        or rj.get("data")
-        or (rj.get("result", {}) or {}).get("items")
-        or []
-    )
-
-    # 3) Маппинг кластер→регионы
+    # 1) загрузим карту кластер->регионы
     mapping_path = os.getenv("CLUSTER_MAP_PATH", "/app/data/cluster_regions.json")
     try:
-        with open(mapping_path, "r", encoding="utf-8") as f:
-            cluster_map = {i["cluster"]: i["regions"] for i in json.load(f)}
+        cluster_map = _load_cluster_mapping(mapping_path)
     except Exception as e:
         await update.message.reply_text(f"Не удалось прочитать {mapping_path}: {e}")
         return
 
-    # Собираем регионы (объединение по всем SKU с наличием > 0)
+    # 2) остатки из OpenAPI
+    try:
+        api = OzonOpenApi()
+        raw = api.fetch_stocks_for_skus(skus)
+        items = _extract_items_from_openapi(raw)
+    except requests.HTTPError as e:
+        snippet = e.response.text if getattr(e, "response", None) is not None else str(e)
+        if snippet and len(snippet) > 1500:
+            snippet = snippet[:1500] + "…"
+        await update.message.reply_text(f"Ошибка stocks OpenAPI: {getattr(e.response,'status_code','???')}\n{snippet}")
+        return
+    except Exception as e:
+        logger.exception("OpenAPI stocks failed")
+        await update.message.reply_text(f"Ошибка stocks OpenAPI: {e}")
+        return
+
+    # 3) собираем регионы (union по всем SKU, где available_stock_count > 0)
     regions_set = set()
-    sku2regions = {}
     for it in items:
         sku = str(it.get("sku", "")).strip()
         cluster = str(it.get("cluster_name", "")).strip()
@@ -94,6 +105,7 @@ async def update_geo(update, context):
             available = int(available)
         except Exception:
             available = 0
+
         if not sku or not cluster or available <= 0:
             continue
 
@@ -102,30 +114,34 @@ async def update_geo(update, context):
             logger.warning("Нет маппинга для кластера %s (SKU %s)", cluster, sku)
             continue
 
-        sku2regions.setdefault(sku, set()).update(regs)
         regions_set.update(regs)
 
     regions = sorted(regions_set, key=str.lower)
     if not regions:
-        await update.message.reply_text("Не найдено регионов с наличием > 0 (по заданным SKU)")
+        await update.message.reply_text("Не найдено регионов с наличием > 0 по заданным SKU")
         return
 
-    # 4) regions → addresses
-    geo = GeoResolver()  # использует GEO_JSON_PATH или /app/data/geo.json по умолчанию
+    # 4) regions -> addresses (uid региона + uid его городов)
+    geo = GeoResolver()  # читает GEO_JSON_PATH или /app/data/geo.json
     addresses = geo.regions_to_addresses(regions)
     if not addresses:
         await update.message.reply_text("Не удалось сопоставить регионы в addresses (UID). Проверь data/geo.json")
         return
 
-    # 5) Обновляем акцию
+    # 5) апдейт акции через seller.ozon.ru (куки в OzonClient)
+    client = OzonClient()
     url_update = f"{client.base}/api/site/marketplace-seller-actions/v1/action/{action_id}/update"
-    update_body = {"action_parameters": {"addresses": addresses}}
+    body = {"action_parameters": {"addresses": addresses}}
 
-    ru = client.sess.post(url_update, json=update_body, timeout=60)
+    ru = client.sess.post(url_update, json=body, timeout=60)
     try:
         ru.raise_for_status()
     except requests.HTTPError:
-        await update.message.reply_text(f"Ошибка обновления акции: {ru.status_code} {ru.text}")
+        snippet = ru.text or ""
+        if len(snippet) > 1500:
+            snippet = snippet[:1500] + "…"
+        await update.message.reply_text(f"Ошибка обновления акции: {ru.status_code}\n{snippet}")
+        logger.error("update action %s failed: %s", action_id, ru.text[:5000])
         return
 
     await update.message.reply_text(
@@ -134,12 +150,26 @@ async def update_geo(update, context):
     )
 
 
+def register_handlers(application):
+    application.add_handler(CommandHandler("update_geo", cmd_update_geo))
+
+
 def main():
-    if not BOT_TOKEN:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(CommandHandler("update_geo", update_geo))
-    application.run_polling(close_loop=False)
+    token = (
+        os.getenv("TELEGRAM_BOT_TOKEN")
+        or os.getenv("BOT_TOKEN")
+        or os.getenv("TELEGRAM_TOKEN")
+        or ""
+    ).strip()
+    if not token:
+        logger.error("Telegram bot token is missing. Set TELEGRAM_BOT_TOKEN/BOT_TOKEN.")
+        raise SystemExit(2)
+
+    app = ApplicationBuilder().token(token).build()
+    register_handlers(app)
+    logger.info("Bot is starting polling...")
+    app.run_polling(close_loop=False)
+
 
 if __name__ == "__main__":
     main()
