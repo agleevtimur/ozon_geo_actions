@@ -12,6 +12,7 @@ HEADERS_BASE = {
     "x-o3-company-id": OZON_COMPANY_ID,
     "Accept": "application/json, text/plain, */*",
     "Origin": "https://seller.ozon.ru",
+    "Referer": "https://seller.ozon.ru/app/highlights/my-highlights/edit/2983461",
     "Priority": "u=3, i",
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
