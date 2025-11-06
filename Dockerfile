@@ -1,18 +1,17 @@
-# База со всеми зависимостями и браузерами
 FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Сначала зависимости — ради кэша
 COPY requirements.txt ./
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Затем код
-COPY . /app
+COPY app ./app
+COPY data ./data
 
-# headless уже работает из коробки
-CMD ["python", "-m", "bot"]
+# Healthcheck: бот должен быть онлайн
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s CMD python -c "import socket; s=socket.socket(); s.connect(('api.telegram.org', 443))" || exit 1
+
+CMD ["python", "-m", "app.bot"]
