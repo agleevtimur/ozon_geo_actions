@@ -4,6 +4,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler
 from .ozon_client import OzonClient
 from .geo_mapping import GeoResolver
 from .stocks import aggregate_by_cluster, pick_regions_with_stock_by_cluster, regions_to_addresses
+from .config import ACTIONS
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("bot")
@@ -48,23 +49,63 @@ async def update_geo_for_action(action_id: str) -> str:
     return f"action {action_id}: addresses updated={ok}, regions={len(regions)}, addresses={len(addresses)}"
 
 async def cmd_update_geo(update, context):
-    # /update_geo [action_id]
-    args = context.args
-    ids = ACTIONS_IDS if not args else [args[0]]
-    if not ids:
-        await update.message.reply_text("Укажите ID: /update_geo <id> или задайте ACTIONS_IDS в ENV")
+    """
+    /update_geo <название_акции>
+    Пример:
+      /update_geo "10 скидка"
+      /update_geo 9
+    """
+    if not ctx.args:
+        await update.message.reply_text("Формат: /update_geo <название_акции>")
         return
 
-    results = []
-    for aid in ids:
-        try:
-            msg = await update_geo_for_action(aid)
-        except Exception as e:
-            msg = f"action {aid}: ERROR {e}"
-            log.exception(msg)
-        results.append(msg)
+    # Собираем аргументы в строку — чтобы можно было писать с пробелами
+    action_name = " ".join(ctx.args).strip().strip('"').strip("'")
 
-    await update.message.reply_text("\n".join(results))
+    # Находим акцию по названию
+    action = ACTIONS.get(action_name)
+    if not action:
+        # Попробуем частичный поиск по цифре или подстроке
+        matches = [k for k in ACTIONS if action_name.lower() in k.lower()]
+        if matches:
+            await update.message.reply_text(
+                f"Возможно, вы имели в виду: {', '.join(matches)}"
+            )
+        else:
+            await update.message.reply_text(
+                f"⚠️ Акция '{action_name}' не найдена. Проверь config.py"
+            )
+        return
+
+    action_id = action["id"]
+    skus = action["skus"]
+    if not skus:
+        await update.message.reply_text(f"⚠️ В акции '{action_name}' нет SKU в config.py")
+        return
+
+    try:
+        stocks_info = aggregate_by_cluster(skus)
+        addresses = _resolve_addresses_from_stocks(stocks_info)
+        resp = _update_action_addresses(action_id, addresses)
+        summary = {
+            "action_name": action_name,
+            "action_id": action_id,
+            "total_stock": stocks_info.get("total", 0),
+            "addresses_count": len(addresses),
+            "skus": skus,
+        }
+        msg = f"✅ Акция обновлена\n{json.dumps(summary, ensure_ascii=False, indent=2)}"
+        await update.message.reply_text(msg)
+    except requests.HTTPError as http_err:
+        try:
+            err_body = http_err.response.json()
+        except Exception:
+            err_body = http_err.response.text if http_err.response is not None else str(http_err)
+        log.exception("HTTP error during update")
+        await update.message.reply_text(f"HTTP {http_err.response.status_code if http_err.response else ''}: {err_body}")
+    except Exception as e:
+        log.exception("update_geo failed")
+        await update.message.reply_text(f"Ошибка: {e}")
 
 def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
