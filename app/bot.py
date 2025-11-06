@@ -1,97 +1,75 @@
+import os
 import logging
-from typing import List
-from datetime import datetime, timedelta, timezone
-
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-
-from .config import TELEGRAM_BOT_TOKEN
-from .ozon_api import update_action_addresses
+from telegram.ext import ApplicationBuilder, CommandHandler
+from .ozon_client import OzonClient
+from .geo_mapping import GeoResolver
+from .stocks import aggregate_by_cluster, pick_regions_with_stock_by_cluster, regions_to_addresses
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("bot")
 
-ACTION_MAP = {
-    "10": 2983461,
-    "9": 2983456,
-    "8": 2983449,
-    "7": 2983433,
-    "6": 2983414,
-    "5": 2983408,
-    "4": 2983396,
-    "2": 2983375,
-    "1": 2983366,
-    "3_common": 2772472,
-}
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+ACTIONS_IDS = [s.strip() for s in os.getenv("ACTIONS_IDS", "").split(",") if s.strip()]
 
-def parse_addresses_arg(arg: str) -> List[str]:
-    items = [x.strip() for x in arg.split(",") if x.strip()]
-    return items
+if not TELEGRAM_BOT_TOKEN:
+    raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
+if not ACTIONS_IDS:
+    log.warning("ACTIONS_IDS is empty; you can still call /update_geo <id>")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        "Привет! Я готов.\n"
-        "/ping — проверить доступность\n"
-        "/update_geo <action_key_or_id> <title> <days> <csv_uids>\n"
-        "  Пример: /update_geo 10 \"10% скидка\" 180 c528e99b-...,8f41253d-...\n"
-        "  <days> — длительность акции от сегодняшнего дня (UTC)."
-    )
+client = OzonClient()
+geo = GeoResolver()
 
-async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("pong")
+async def update_geo_for_action(action_id: str) -> str:
+    # 1) SKU внутри акции (если требуется вашим стоковым сервисом)
+    skus = client.list_action_skus(action_id)
 
-def _coerce_action_id(s: str) -> int:
-    if s.isdigit() and len(s) > 4:
-        return int(s)
-    if s in ACTION_MAP:
-        return ACTION_MAP[s]
-    raise ValueError("Неизвестная акция. Передай полный ID или один из ключей: " + ", ".join(ACTION_MAP.keys()))
+    # 2) Сырые остатки по кластерам (под ваш сервис/API)
+    raw = client.fetch_stocks_raw_for_skus(skus)
 
-async def update_geo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    try:
-        if len(context.args) < 4:
-            await update.message.reply_text(
-                "Формат: /update_geo <action_key_or_id> <title> <days> <csv_uids>\n"
-                "Пример: /update_geo 10 \"10% скидка\" 180 c528e99b-...,8f41253d-..."
-            )
-            return
+    # 3) Агрегация: кластер → {регион: qty}
+    by_cluster = aggregate_by_cluster(raw)
 
-        action_key_or_id = context.args[0]
-        title = context.args[1]
-        days = int(context.args[2])
-        csv_uids = " ".join(context.args[3:])
-        addresses = parse_addresses_arg(csv_uids)
+    # 4) Сбор регионов для адресов
+    regions = pick_regions_with_stock_by_cluster(by_cluster)
 
-        action_id = _coerce_action_id(action_key_or_id)
+    # 5) Преобразование регионов → список UID (регион + его города)
+    addresses = geo.regions_to_addresses(regions)
 
-        now_utc = datetime.now(timezone.utc)
-        date_start_iso = now_utc.replace(microsecond=0).isoformat().replace("+00:00", "Z")
-        date_end_iso = (now_utc + timedelta(days=days)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    # 6) Получить текущие параметры акции и заменить addresses
+    current = client.view_action(action_id)
+    if current is None:
+        # fallback: минимальная замена только addresses на update
+        ok = client.update_action_addresses_only(action_id, addresses)
+        return f"action {action_id}: addresses updated via fallback={ok}, regions={len(regions)}, addresses={len(addresses)}"
 
-        log.info("Updating action %s with %d addresses", action_id, len(addresses))
-        res = update_action_addresses(
-            action_id=action_id,
-            title=title,
-            date_start_iso=date_start_iso,
-            date_end_iso=date_end_iso,
-            addresses=addresses,
-        )
-        await update.message.reply_text(f"Ок. Обновил акцию {action_id}. Ответ OZON: {res}")
-    except Exception as e:
-        log.exception("update_geo failed")
-        await update.message.reply_text(f"Ошибка: {e}")
+    # заменить addresses в текущем параметр-объекте
+    body = client.build_update_body_from_view(current, addresses)
+    ok = client.update_action_with_body(action_id, body)
+    return f"action {action_id}: addresses updated={ok}, regions={len(regions)}, addresses={len(addresses)}"
 
-def main() -> None:
-    if not TELEGRAM_BOT_TOKEN:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN is empty. Set Railway variable TELEGRAM_BOT_TOKEN.")
+async def cmd_update_geo(update, context):
+    # /update_geo [action_id]
+    args = context.args
+    ids = ACTIONS_IDS if not args else [args[0]]
+    if not ids:
+        await update.message.reply_text("Укажите ID: /update_geo <id> или задайте ACTIONS_IDS в ENV")
+        return
 
+    results = []
+    for aid in ids:
+        try:
+            msg = await update_geo_for_action(aid)
+        except Exception as e:
+            msg = f"action {aid}: ERROR {e}"
+            log.exception(msg)
+        results.append(msg)
+
+    await update.message.reply_text("\n".join(results))
+
+def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("ping", ping))
-    app.add_handler(CommandHandler("update_geo", update_geo))
-
-    log.info("Bot started.")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.add_handler(CommandHandler("update_geo", cmd_update_geo))
+    app.run_polling(allowed_updates=["message", "edited_message"])
 
 if __name__ == "__main__":
     main()
