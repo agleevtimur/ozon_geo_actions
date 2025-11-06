@@ -1,103 +1,42 @@
-# ozon_geo_bot_full
+# Ozon Geo Bot – Railway scaffold
 
-Telegram-бот для управления географией акций Ozon:
-- Парсит географию из `data/geo.json` (страна → регионы → города) и строит быстрые индексы UID.
-- Знает кластеры и соответствующие им регионы (из `data/clusters_mapping.json`).
-- Может подтягивать остатки по кластерам (на основе простого вызова API; при необходимости доработай под свою старую реализацию).
-- Обновляет географию акции через POST `https://seller.ozon.ru/api/site/marketplace-seller-actions/v1/action/{action_id}/update`.
-- Все операции выполняются **через Telegram-бота** (никакого CLI).
+Минимальный каркас Telegram‑бота, который умеет обновлять географию в акции OZON с помощью списка UID адресов.
 
-## Быстрый старт (локально)
+## Быстрый старт (Railway)
 
-1. Установи зависимости:
-   ```bash
-   pip install -r requirements.txt
+1. Создай новый проект и подключи репозиторий с этим кодом.
+2. В **Variables** добавь:
+   - `TELEGRAM_BOT_TOKEN` — токен бота
+   - `OZON_COOKIE_PLAIN` — вся строка Cookie (plain text), без `path`/`expires`
+   - `OZON_COMPANY_ID` — твой company id (по умолчанию 1297124)
+3. Деплоится автоматически. Стартовая команда берётся из `Procfile`:
+   ```
+   worker: PYTHONPATH=$(pwd) python -m app.bot
    ```
 
-2. Подготовь переменные окружения (можно через `.env` в корне):
-   ```env
-   TELEGRAM_BOT_TOKEN=123456:ABC-DEF...      # токен бота
-   OZON_COOKIE=__Secure-access-token=...; ... # ПЛОСКАЯ СТРОКА Cookie целиком, БЕЗ path/expire
-   OZON_COMPANY_ID=1297124
-   OZON_LANGUAGE=ru
-   DEFAULT_ACTION_ID=2983461                  # по умолчанию "10 скидка"
-   DEFAULT_TITLE_TEMPLATE={discount} скидка # динамический шаблон
-   ```
+## Команды
 
-3. Заполни данные:
-   - `data/geo.json` — **сырой** JSON со структурой страна/регион/города/uid (ты уже присылал).
-   - `data/clusters_mapping.json` — словарь `cluster_code -> [region_names]` (пример уже лежит).
+- `/ping` — проверка доступности
+- `/update_geo <action_key_or_id> <title> <days> <csv_uids>`
+  - Пример:
+    `/update_geo 10 "10% скидка" 180 c528e99b-...,8f41253d-...`
 
-4. Запусти:
-   ```bash
-   python -m app.bot
-   ```
+`action_key_or_id` можно передать как:
+- Полный ID акции (например, `2983461`), или
+- Короткий ключ из карты в `app/bot.py`: `10`, `9`, `8`, ..., `3_common`
 
-## Docker
+## Что добавить под тебя
+
+- Реальную логику «остатков по кластерам» и «кластер → регионы → города → UID`.
+  - Сохрани её модулями в `app/` и вызывай из команд бота.
+  - При желании храни JSON‑маппинг в `data/locations.json`.
+
+## Локальный запуск
 
 ```bash
-docker build -t ozon-geo-bot .
-docker run --rm -e TELEGRAM_BOT_TOKEN=... -e OZON_COOKIE="..." -e OZON_COMPANY_ID=1297124 ozon-geo-bot
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+export TELEGRAM_BOT_TOKEN=...
+export OZON_COOKIE_PLAIN='__Secure-access-token=...; ...'
+PYTHONPATH=$(pwd) python -m app.bot
 ```
-
-## Railway
-
-Вынеси `OZON_COOKIE` в **глобальную переменную Railway** (plain text). Никаких JSON, никакого `path/expire` — просто строка Cookie, как её даёт браузер.
-
-## Команды Telegram-бота
-
-- `/start` — подсказка.
-- `/status` — показать текущие настройки.
-- `/set_action <id>` — установить ID акции (см. список ниже).
-- `/set_title <шаблон>` — установить шаблон заголовка, например: `{discount} скидка`.
-- `/set_clusters <список>` — указать кластеры, например: `MSK SPB KZN`.
-- `/preview_geo` — показать, какие регионы/города попадут в `addresses`.
-- `/apply_geo <discount>` — применить географию к акции, сформировав `title` из шаблона.
-
-### ID акций (из твоего списка)
-
-- 2983461 — 10 скидка
-- 2983456 — 9 скидка
-- 2983449 — 8 скидка
-- 2983433 — 7 скидка
-- 2983414 — 6 скидка
-- 2983408 — 5 скидка
-- 2983396 — 4 скидка
-- 2983375 — 2 скидка
-- 2983366 — 1 скидка
-- 2772472 — 3 ОБЩАЯ скидка
-
-## Как работает подтяжка остатков
-
-Файл `app/core/stocks.py` реализует функцию `get_clusters_with_stock(...)`.
-По умолчанию сделан безопасный каркас:
-- Пытается запросить агрегированные остатки по товарам и адресам (внутренний `seller.ozon.ru` эндпоинт, заголовки те же — при необходимости замени URL на твою старую логику).
-- Маппит адреса к регионам и кластерам через `geo_index`.
-- Возвращает список кластеров, где суммарный остаток > 0.
-
-> Если хочешь **в точности** твою старую логику из `ozon_geo_actions`, просто перенеси код запроса в функцию `fetch_raw_stocks(...)` и/или адаптируй расчёт агрегатов — вся обвязка уже готова.
-
-## Структура
-
-```
-app/
-  bot.py
-  config.py
-  ozon_api.py
-  geo_loader.py
-  mappings.py
-  core/
-    stocks.py
-  utils/
-    log.py
-data/
-  geo.json                 # заполни своей "сырой" географией
-  clusters_mapping.json    # пример внутри
-Dockerfile
-requirements.txt
-README.md
-```
-
----
-
-**Внимание.** Проект готов к пушу в GitHub. Просто проверь `data/geo.json` и `data/clusters_mapping.json`, пропиши `.env` или переменные Railway, и можно тестировать на любой акции из списка.
