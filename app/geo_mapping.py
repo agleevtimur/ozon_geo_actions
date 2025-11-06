@@ -1,95 +1,82 @@
-# /app/app/geo_mapping.py
-import json
 import os
-from typing import Optional, Dict, Any
+import json
 
 
 class GeoResolver:
     """
-    Читает уже ГОТОВЫЙ geo.json формата:
+    Загружает geo.json (страна/регионы/города) и даёт функции:
+      - get_region_uid(name)
+      - get_city_uid(name)
+      - regions_to_addresses(region_names) -> [uids]
+    Формат ожидаем как у твоего большого geo.json:
     {
-      "country": {"name": "Россия", "uid": "..." },
+      "country": {...},
       "regions": [
-        {"name": "Московская область", "uid": "...", "cities": [
-          {"name": "Химки", "uid": "..."},
-          ...
-        ]},
+        {
+          "name": "Республика Татарстан",
+          "uid": "...",
+          "cities": [
+            {"name": "Казань", "uid": "..."},
+            ...
+          ]
+        },
         ...
       ]
     }
-
-    Никакой конвертации «сырого» вида не делает.
     """
 
-    def __init__(self, path: Optional[str] = None) -> None:
-        # По умолчанию ждём файл в /app/data/geo.json (Railway)
-        self.path: str = path or os.getenv("GEO_JSON_PATH", "/app/data/geo.json")
+    def __init__(self, path: str | None = None):
+        self.path = path or os.getenv("GEO_JSON_PATH", "/app/data/geo.json")
 
-        self.country: Dict[str, Any] = {}
-        self.regions: Dict[str, str] = {}  # region_name -> uid
-        self.cities: Dict[str, str] = {}   # city_name   -> uid
+        self.regions: dict[str, str] = {}
+        self.cities: dict[str, str] = {}
+        self.region_to_city_uids: dict[str, list[str]] = {}
 
         self._load_and_index()
 
-    def _load_and_index(self) -> None:
-        if not os.path.exists(self.path):
-            raise FileNotFoundError(f"geo.json not found at {self.path}")
-
+    def _load_and_index(self):
         with open(self.path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        if not isinstance(data, dict):
-            raise RuntimeError("geo.json must be a JSON object at the top level")
-
-        if "regions" not in data or not isinstance(data["regions"], list):
-            raise RuntimeError("geo.json missing 'regions' (array)")
-
-        # country — опционально; если задан, кладём как есть
-        self.country = data.get("country", {}) or {}
-
-        # Индексация регионов и городов
-        for region in data["regions"]:
+        for region in data.get("regions", []):
             rname = (region.get("name") or "").strip()
             ruid = region.get("uid")
-            if not rname or not ruid:
-                # пропускаем битые элементы
-                continue
+            if rname and ruid:
+                self.regions[rname] = ruid
 
-            self.regions[rname] = ruid
-
-            for city in region.get("cities", []) or []:
+            city_uids = []
+            for city in (region.get("cities") or []):
                 cname = (city.get("name") or "").strip()
                 cuid = city.get("uid")
-                if not cname or not cuid:
-                    continue
-                self.cities[cname] = cuid
+                if cname and cuid:
+                    self.cities[cname] = cuid
+                    city_uids.append(cuid)
 
-        if not self.regions:
-            raise RuntimeError("No regions found in geo.json")
+            if rname:
+                self.region_to_city_uids[rname] = city_uids
 
-    # ---------- Публичные методы ----------
-    def get_country_uid(self) -> Optional[str]:
-        return self.country.get("uid")
+    def get_region_uid(self, region_name: str) -> str | None:
+        return self.regions.get(region_name)
 
-    def get_region_uid(self, name: str) -> Optional[str]:
-        return self.regions.get(name.strip())
+    def get_city_uid(self, city_name: str) -> str | None:
+        return self.cities.get(city_name)
 
-    def get_city_uid(self, name: str) -> Optional[str]:
-        return self.cities.get(name.strip())
-
-    def resolve(self, name: str) -> Optional[str]:
+    def regions_to_addresses(self, region_names: list[str]) -> list[str]:
         """
-        Универсальный резолвер: сначала ищем город,
-        если не нашли — пробуем регион.
+        Возвращает список UID:
+          - UID региона,
+          - UID всех его городов.
+        Уникализирует с сохранением порядка.
         """
-        key = name.strip()
-        return self.cities.get(key) or self.regions.get(key)
-
-
-# Для быстрой диагностики при запуске как модуля:
-if __name__ == "__main__":
-    geo = GeoResolver()
-    print(
-        f"✅ geo.json loaded: country_uid={geo.get_country_uid()} | "
-        f"regions={len(geo.regions)} | cities={len(geo.cities)} | path={geo.path}"
-    )
+        out = []
+        seen = set()
+        for r in region_names:
+            ruid = self.get_region_uid(r)
+            if ruid and ruid not in seen:
+                out.append(ruid)
+                seen.add(ruid)
+            for cuid in self.region_to_city_uids.get(r, []):
+                if cuid not in seen:
+                    out.append(cuid)
+                    seen.add(cuid)
+        return out
