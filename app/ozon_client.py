@@ -49,7 +49,6 @@ class OzonClient:
 
     # ---- Actions: view / update ----
     def view_action(self, action_id: str) -> Optional[Dict[str, Any]]:
-        """Получить текущие параметры акции. Используем view/inspect-эндпоинт UI."
         try:
             url = f"{BASE}/marketplace-seller-actions/v1/action/{action_id}/view"
             r = requests.get(url, headers=ACTION_HEADERS, timeout=60)
