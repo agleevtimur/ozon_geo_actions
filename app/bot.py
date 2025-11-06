@@ -7,7 +7,7 @@ import sys
 from app.ozon_client import OzonClient
 from app.geo_mapping import GeoResolver
 from app.config import ACTIONS
-from telegram.ext import ApplicationBuilder
+from telegram.ext import Application, CommandHandler
 
 
 logging.basicConfig(
