@@ -1,60 +1,87 @@
-from typing import Dict, Any, List, Set, DefaultDict
-from collections import defaultdict
+import os
 import logging
+from typing import Dict, Any, List
+import requests
 
-log = logging.getLogger("stocks")
+log = logging.getLogger(__name__)
 
-# === LEGACY aggregation ===
-# Сырые данные -> агрегировать по кластерам, затем по регионам.
-# Эта функция реализует старую логику:
-# - разбирает ответ вашего бэкенда (адаптируйте ключи в местах помеченных 'ADAPT')
-# - суммирует остатки по регионам внутри кластера
-#
-# Ожидаемый интерфейс: aggregate_by_cluster(raw) -> {cluster_name: {region_name: qty}}
+# Эти переменные должны быть заданы в Railway:
+# OZON_CLIENT_ID, OZON_API_KEY
+OZON_CLIENT_ID = os.getenv("OZON_CLIENT_ID", "").strip()
+OZON_API_KEY = os.getenv("OZON_API_KEY", "").strip()
 
-def aggregate_by_cluster(raw: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
-    by_cluster: DefaultDict[str, DefaultDict[str, int]] = defaultdict(lambda: defaultdict(int))
 
-    # ---- ADAPT: разбор 'raw' под вашу старую схему ----
-    # Примерные структуры (поставьте ваши ключи):
-    # raw = {
-    #   "clusters": [
-    #       {"name": "Центральный", "regions": [
-    #           {"name": "Москва и МО", "qty": 123, "items": [...]},
-    #       ]},
-    #       ...
-    #   ]
-    # }
-    clusters = raw.get("clusters") or []
-    if clusters:
-        for cl in clusters:
-            cname = cl.get("name") or cl.get("cluster") or "UNKNOWN"
-            regions = cl.get("regions") or []
-            for r in regions:
-                rname = r.get("name") or r.get("region") or "UNKNOWN"
-                qty = int(r.get("qty", 0))
-                by_cluster[cname][rname] += qty
-        return {c: dict(r) for c, r in by_cluster.items()}
+def _ozon_openapi_session() -> requests.Session:
+    if not OZON_CLIENT_ID or not OZON_API_KEY:
+        raise RuntimeError("OZON_CLIENT_ID / OZON_API_KEY are required for /v1/analytics/stocks")
+    s = requests.Session()
+    s.headers.update({
+        "Client-Id": OZON_CLIENT_ID,
+        "Api-Key": OZON_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    })
+    return s
 
-    # Вариант 2: если ваш ответ — это список позиций со свойствами cluster/region/qty
-    items = raw.get("items") or raw.get("data") or []
-    for it in items:
-        cname = it.get("cluster") or "UNKNOWN"
-        rname = it.get("region") or "UNKNOWN"
-        qty = int(it.get("qty", 0))
-        by_cluster[cname][rname] += qty
 
-    return {c: dict(r) for c, r in by_cluster.items()}
+def _fetch_stocks_for_skus(skus: List[str]) -> Dict[str, Any]:
+    """
+    Официальный Open API:
+      POST https://api-seller.ozon.ru/v1/analytics/stocks
+      body: {"skus": ["string", ...]}
+    Возвращаем сырой JSON как есть.
+    """
+    sess = _ozon_openapi_session()
+    url = "https://api-seller.ozon.ru/v1/analytics/stocks"
+    payload = {"skus": [str(s) for s in skus]}
+    r = sess.post(url, json=payload, timeout=60)
+    r.raise_for_status()
+    data = r.json()
+    log.info("OpenAPI stocks fetched for %d skus", len(skus))
+    return data
 
-def pick_regions_with_stock_by_cluster(by_cluster: Dict[str, Dict[str, int]]) -> List[str]:
-    """Собираем список регионов, где есть товар (qty>0), объединяя по всем кластерам."""
-    regions: Set[str] = set()
-    for _cluster, regmap in by_cluster.items():
-        for rname, qty in regmap.items():
-            if qty > 0:
-                regions.add(rname)
-    return sorted(regions)
 
-# Перевод регионов в addresses происходит в GeoResolver.regions_to_addresses
-def regions_to_addresses(regions: List[str]) -> List[str]:
-    raise NotImplementedError("Use GeoResolver.regions_to_addresses")  # держим интерфейс явным
+def aggregate_by_cluster(skus: List[str]) -> Dict[str, Any]:
+    """
+    'Старая логика' у тебя опиралась на агрегацию остатков -> кластеры.
+    Здесь мы гарантированно тянем сырые остатки через Open API.
+    Чтобы не ломать твой конвейер дальше, возвращаем структуру:
+    {
+      "raw": <сырой ответ Open API>,
+      "per_sku_total": {"<sku>": int_total, ...},
+      "total": <int>
+    }
+
+    Если понадобится – на этом уровне можно вернуть и кластеры,
+    но поскольку конкретное разложение по кластерам зависит от
+    твоего готового geo.json/правил, оставляем агрегацию адресов
+    в bot.py (resolve из geo.json).
+    """
+    raw = _fetch_stocks_for_skus(skus)
+
+    per_sku_total: Dict[str, int] = {}
+    total = 0
+
+    # Попробуем аккуратно разобрать наиболее типичные схемы ответа Open API,
+    # но без жёсткой привязки к полям (бывают минорные отличия).
+    # Обычный кейс: {"result":[{"sku":"123","stocks":[{"present":10, ...}, ...]}, ...]}
+    result = raw.get("result") or raw.get("items") or []
+    for item in result:
+        sku = str(item.get("sku") or item.get("offer_id") or "")
+        if not sku:
+            continue
+        sku_sum = 0
+
+        # Часто остатки лежат в массиве "stocks" или "warehouses".
+        buckets = item.get("stocks") or item.get("warehouses") or []
+        for b in buckets:
+            # Пытаемся взять очевидные поля количества
+            for key in ("present", "free_to_sell_amount", "quantity", "stock"):
+                if isinstance(b.get(key), int):
+                    sku_sum += int(b[key])
+                    break  # одно поле на запись достаточно
+
+        per_sku_total[sku] = sku_sum
+        total += sku_sum
+
+    return {"raw": raw, "per_sku_total": per_sku_total, "total": total}
