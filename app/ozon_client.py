@@ -13,7 +13,7 @@ HEADERS_BASE = {
     "Accept": "application/json, text/plain, */*",
 }
 
-class OzonSellerUI:
+class OzonClient:
     """
     Клиент для seller.ozon.ru — изменение акции (update).
     """
