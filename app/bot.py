@@ -5,7 +5,8 @@ import logging
 import requests
 from typing import Any, Dict, List
 
-from telegram.ext import ApplicationBuilder, CommandHandler
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 from app.config import ACTIONS
 from app.geo_mapping import GeoResolver
