@@ -68,7 +68,10 @@ def update_action_via_proxy(
     logger.info("POST %s", url)
     resp = sess.post(url, headers=headers, json=body, timeout=90, allow_redirects=False)
 
-    if resp.status_code >= 400:
+    # лог статуса и ключевых заголовков
+    logger.info("Update response: %s | Location=%s | Content-Length=%s", resp.status_code, resp.headers.get("Location"), resp.headers.get("Content-Length"))
+
+    if 300 <= resp.status_code >= 400:
         # короткое сообщение в логах
         snippet = resp.text[:1500] + "..." if len(resp.text) > 1500 else resp.text
         logger.error("Ошибка обновления акции (%s): %s", resp.status_code, snippet)
