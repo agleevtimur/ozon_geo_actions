@@ -129,8 +129,6 @@ async def cmd_update_geo(update, context):
         return
 
     # 5) апдейт акции через seller.ozon.ru (куки в OzonClient)
-   title = os.getenv("ACTION_TITLE", "10 скидка")
-
     resp = update_action_via_proxy(
         action_id=action_id,
         addresses=addresses,
