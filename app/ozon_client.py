@@ -22,17 +22,17 @@ def update_action_via_proxy(
     cookie_header = os.getenv("OZON_COOKIE_HEADER", "").strip()
     if not cookie_header:
         raise RuntimeError("OZON_COOKIE_HEADER is empty. Укажи полный Cookie из Postman.")
-
+    logger.info(cookie_header)
+    
     headers = {
         "Cookie": cookie_header,
         "x-o3-app-name": "seller-ui",
-        "x-o3-company-id": os.getenv("OZON_COMPANY_ID", "1297124"),
+        "x-o3-company-id": "1297124",
         "x-o3-language": "ru",
         "x-o3-page-type": "highlights-other",
-        "User-Agent": "PostmanRuntime/7.37.3",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
         "Origin": "https://seller.ozon.ru",
-        "Referer": "https://seller.ozon.ru/",
         "Content-Type": "application/json",
     }
 
