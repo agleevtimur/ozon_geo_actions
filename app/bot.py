@@ -157,15 +157,15 @@ async def cmd_update_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Обновляет географию во ВСЕХ акциях из config.py::ACTIONS.
     Идём последовательно: так проще логировать и избегать лимитов.
     """
-    if not _actions_by_name:
+    if not ACTIONS:
         await update.message.reply_text("config.py::ACTIONS пуст — нечего обновлять.")
         return
 
-    await update.message.reply_text(f"Начинаю массовое обновление: {len(_actions_by_name)} акций…")
+    await update.message.reply_text(f"Начинаю массовое обновление: {len(ACTIONS)} акций…")
 
     ok, fail = 0, 0
     # стабильный порядок:
-    for name in sorted(_actions_by_name.keys()):
+    for name in sorted(ACTIONS.keys()):
         try:
             msg = await _update_geo_for_action_by_name(name)
             if msg.startswith("OK"):
