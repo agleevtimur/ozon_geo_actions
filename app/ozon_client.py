@@ -71,13 +71,20 @@ def update_action_via_proxy(
     # лог статуса и ключевых заголовков
     logger.info("Update response: %s | Location=%s | Content-Length=%s", resp.status_code, resp.headers.get("Location"), resp.headers.get("Content-Length"))
 
-    if 300 <= resp.status_code >= 400:
-        # короткое сообщение в логах
-        snippet = resp.text[:1500] + "..." if len(resp.text) > 1500 else resp.text
-        logger.error("Ошибка обновления акции (%s): %s", resp.status_code, snippet)
-        try:
-            resp.raise_for_status()
-        except requests.HTTPError:
-            pass
+    # ✅ Если 307/302/303/308 — повторяем POST на Location (как делает curl --location)
+    if resp.status_code in (301, 302, 303, 307, 308):
+        loc = resp.headers.get("Location")
+        if not loc:
+            logger.error("Redirect without Location header")
+            resp.raise_for_status()  # даст HTTPError с 30x
+        logger.info("Following redirect to: %s", loc)
+        # ВАЖНО: тот же session (примет set-cookie из 307) и тот же proxy/headers/body
+        resp = sess.post(loc, headers=headers, json=body, timeout=90, allow_redirects=False)
+        logger.info(
+            "Redirected response: %s | Content-Length=%s",
+            resp.status_code, resp.headers.get("Content-Length")
+        )
 
+    # дальше как обычно
+    resp.raise_for_status()
     return resp
