@@ -152,10 +152,37 @@ async def cmd_update_geo(update, context):
     await update.message.reply_text(f"❌ Обновление вернуло HTTP {status}\n{snippet}")
     logger.error("Update HTTP %s: %s", status, (resp.text or "")[:5000])
 
+async def cmd_update_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обновляет географию во ВСЕХ акциях из config.py::ACTIONS.
+    Идём последовательно: так проще логировать и избегать лимитов.
+    """
+    if not _actions_by_name:
+        await update.message.reply_text("config.py::ACTIONS пуст — нечего обновлять.")
+        return
+
+    await update.message.reply_text(f"Начинаю массовое обновление: {len(_actions_by_name)} акций…")
+
+    ok, fail = 0, 0
+    # стабильный порядок:
+    for name in sorted(_actions_by_name.keys()):
+        try:
+            msg = await _update_geo_for_action_by_name(name)
+            if msg.startswith("OK"):
+                ok += 1
+            else:
+                fail += 1
+            await update.message.reply_text(f"— {name}: {msg}")
+        except Exception as e:
+            fail += 1
+            await update.message.reply_text(f"— {name}: ошибка: {e}")
+
+    await update.message.reply_text(f"Готово. Успешно: {ok}, с ошибками: {fail}.")
+
 
 def register_handlers(application):
     application.add_handler(CommandHandler("update_geo", cmd_update_geo))
-
+    application.add_handler(CommandHandler("update_all", cmd_update_all))
 
 def main():
     token = (
