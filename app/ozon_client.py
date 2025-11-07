@@ -1,44 +1,82 @@
 import os
 import requests
-from typing import Dict, Any, List
+import json
+import logging
 
-OZON_COOKIES = os.getenv("OZON_COOKIES_PLAINTEXT", "").strip()
-OZON_COMPANY_ID = os.getenv("OZON_COMPANY_ID", "1297124").strip()
+logger = logging.getLogger(__name__)
 
-HEADERS_BASE = {
-    "x-o3-app-name": "seller-ui",
-    "x-o3-language": "ru",
-    "x-o3-page-type": "highlights-other",
-    "x-o3-company-id": OZON_COMPANY_ID,
-    "Accept": "application/json, text/plain, */*",
-    "Origin": "https://seller.ozon.ru",
-    "Referer": "https://seller.ozon.ru/app/highlights/my-highlights/edit/2983461",
-    "Priority": "u=3, i",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-origin",
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15"
-}
-
-class OzonClient:
+def update_action_via_proxy(
+    action_id: int,
+    addresses: list[str],
+    title: str,
+    date_start: str,
+    date_end: str
+) -> requests.Response:
     """
-    Клиент для seller.ozon.ru — изменение акции (update).
+    Обновляет акцию через UI-домен seller.ozon.ru
+    Использует резидентный прокси и куки/заголовки из ENV.
     """
-    def __init__(self) -> None:
-        if not OZON_COOKIES:
-            raise RuntimeError("OZON_COOKIES_PLAINTEXT is required for seller-ui calls")
-        self.sess = requests.Session()
-        self.sess.headers.update(HEADERS_BASE)
-        self.sess.headers["Cookie"] = OZON_COOKIES
-        self.base = "https://seller.ozon.ru"
 
-    def update_action_addresses(self, action_id: int, new_addresses: List[str], action_parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Полный апдейт акции — отправляем action_parameters, где меняем только addresses.
-        URL: /api/site/marketplace-seller-actions/v1/action/{id}/update
-        """
-        url = f"{self.base}/api/site/marketplace-seller-actions/v1/action/{action_id}/update"
-        body = {"action_parameters": action_parameters | {"addresses": new_addresses}}
-        r = self.sess.post(url, json=body, timeout=60)
-        r.raise_for_status()
-        return r.json()
+    base = "https://seller.ozon.ru"
+    url = f"{base}/api/site/marketplace-seller-actions/v1/action/{action_id}/update"
+
+    # Заголовки и куки
+    cookie_header = os.getenv("OZON_COOKIE_HEADER", "").strip()
+    if not cookie_header:
+        raise RuntimeError("OZON_COOKIE_HEADER is empty. Укажи полный Cookie из Postman.")
+
+    headers = {
+        "Cookie": cookie_header,
+        "x-o3-app-name": "seller-ui",
+        "x-o3-company-id": os.getenv("OZON_COMPANY_ID", "1297124"),
+        "x-o3-language": "ru",
+        "x-o3-page-type": "highlights-other",
+        "User-Agent": os.getenv(
+            "BROWSER_UA",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/127.0.0.0 Safari/537.36",
+        ),
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://seller.ozon.ru",
+        "Referer": "https://seller.ozon.ru/",
+        "Content-Type": "application/json",
+    }
+
+    # Тело запроса полностью, как в твоём curl
+    body = {
+        "action_parameters": {
+            "title": title,
+            "date_start": date_start,
+            "date_end": date_end,
+            "type": "DISCOUNT",
+            "marketplace_id": 1,
+            "warehouses": [],
+            "addresses": addresses,
+            "is_additional_discount": false,
+            "marketplace_min_discount_percent": 1,
+            "discount_type": FINAL_PRICE,
+        }
+    }
+
+    # Настройка прокси
+    proxy = os.getenv("PROXY_URL", "").strip()
+    sess = requests.Session()
+    if proxy:
+        sess.proxies = {"http": proxy, "https": proxy}
+        logger.info("Используется прокси: %s", proxy)
+
+    # Отправка запроса
+    logger.info("POST %s", url)
+    resp = sess.post(url, headers=headers, json=body, timeout=90, allow_redirects=False)
+
+    if resp.status_code >= 400:
+        # короткое сообщение в логах
+        snippet = resp.text[:1500] + "..." if len(resp.text) > 1500 else resp.text
+        logger.error("Ошибка обновления акции (%s): %s", resp.status_code, snippet)
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError:
+            pass
+
+    return resp
