@@ -141,7 +141,7 @@ async def cmd_update_geo(update, context):
 
     if 200 <= status < 300:
         await update.message.reply_text(
-            f"✅ Обновил акцию «{title}» (id={action_id}). HTTP {status}\n"
+            f"✅ Обновил акцию «{action_name}» (id={action_id}). HTTP {status}\n"
             f"Регионов: {len(regions)}, адресов: {len(addresses)}"
         )
         return
