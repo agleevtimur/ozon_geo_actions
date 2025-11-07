@@ -128,6 +128,8 @@ async def cmd_update_geo(update, context):
         await update.message.reply_text("Не удалось сопоставить регионы в addresses (UID). Проверь data/geo.json")
         return
 
+    logger.info(addresses)
+    
     # 5) апдейт акции через seller.ozon.ru (куки в OzonClient)
     resp = update_action_via_proxy(
         action_id=action_id,
