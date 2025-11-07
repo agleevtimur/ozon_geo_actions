@@ -29,12 +29,7 @@ def update_action_via_proxy(
         "x-o3-company-id": os.getenv("OZON_COMPANY_ID", "1297124"),
         "x-o3-language": "ru",
         "x-o3-page-type": "highlights-other",
-        "User-Agent": os.getenv(
-            "BROWSER_UA",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/127.0.0.0 Safari/537.36",
-        ),
+        "User-Agent": "PostmanRuntime/7.37.3",
         "Accept": "application/json, text/plain, */*",
         "Origin": "https://seller.ozon.ru",
         "Referer": "https://seller.ozon.ru/",
