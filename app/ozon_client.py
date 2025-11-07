@@ -8,9 +8,7 @@ logger = logging.getLogger(__name__)
 def update_action_via_proxy(
     action_id: int,
     addresses: list[str],
-    title: str,
-    date_start: str,
-    date_end: str
+    title: str
 ) -> requests.Response:
     """
     Обновляет акцию через UI-домен seller.ozon.ru
@@ -47,15 +45,15 @@ def update_action_via_proxy(
     body = {
         "action_parameters": {
             "title": title,
-            "date_start": date_start,
-            "date_end": date_end,
+            "date_start": "2025-10-01T21:00:00.000Z",
+            "date_end": "2026-05-03T20:59:59.000Z",
             "type": "DISCOUNT",
             "marketplace_id": 1,
             "warehouses": [],
             "addresses": addresses,
-            "is_additional_discount": false,
+            "is_additional_discount": False,
             "marketplace_min_discount_percent": 1,
-            "discount_type": FINAL_PRICE,
+            "discount_type": "FINAL_PRICE",
         }
     }
 
