@@ -133,18 +133,18 @@ async def cmd_update_geo(update, context):
         action_id=action_id,
         addresses=addresses,
         title=action_name
-)
+    )
 
-if resp.status_code >= 400:
-    snippet = (resp.text or "")[:1500]
-    # коротко в чат
-    if "Antibot" in snippet or "enable JavaScript" in snippet:
-        await update.message.reply_text("Seller вернул антибот. Проверь OZON_COOKIE_HEADER/PROXY_URL.")
-    else:
-        await update.message.reply_text(f"Ошибка обновления акции: {resp.status_code}\n{snippet}")
-    # подробно в лог
-    logger.error("update action %s failed: %s", action_id, (resp.text or "")[:5000])
-    return
+    if resp.status_code >= 400:
+        snippet = (resp.text or "")[:1500]
+        # коротко в чат
+        if "Antibot" in snippet or "enable JavaScript" in snippet:
+            await update.message.reply_text("Seller вернул антибот. Проверь OZON_COOKIE_HEADER/PROXY_URL.")
+        else:
+            await update.message.reply_text(f"Ошибка обновления акции: {resp.status_code}\n{snippet}")
+        # подробно в лог
+        logger.error("update action %s failed: %s", action_id, (resp.text or "")[:5000])
+        return
 
 
 def register_handlers(application):
