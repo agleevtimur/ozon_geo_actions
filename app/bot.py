@@ -10,7 +10,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler
 from app.config import ACTIONS
 from app.geo_mapping import GeoResolver
 from app.ozon_openapi import OzonOpenApi
-from app.ozon_client import OzonClient  # UI-домен с куками (seller.ozon.ru)
+from app.ozon_client import update_action_via_proxy  # UI-домен с куками (seller.ozon.ru)
 
 # базовое логирование в stdout
 logging.basicConfig(
@@ -129,25 +129,24 @@ async def cmd_update_geo(update, context):
         return
 
     # 5) апдейт акции через seller.ozon.ru (куки в OzonClient)
-    client = OzonClient()
-    url_update = f"{client.base}/api/site/marketplace-seller-actions/v1/action/{action_id}/update"
-    body = {"action_parameters": {"addresses": addresses}}
+   title = os.getenv("ACTION_TITLE", "10 скидка")
 
-    ru = client.sess.post(url_update, json=body, timeout=60)
-    try:
-        ru.raise_for_status()
-    except requests.HTTPError:
-        snippet = ru.text or ""
-        if len(snippet) > 1500:
-            snippet = snippet[:1500] + "…"
-        await update.message.reply_text(f"Ошибка обновления акции: {ru.status_code}\n{snippet}")
-        logger.error("update action %s failed: %s", action_id, ru.text[:5000])
-        return
+    resp = update_action_via_proxy(
+        action_id=action_id,
+        addresses=addresses,
+        title=action_name
+)
 
-    await update.message.reply_text(
-        f"OK. Обновил адреса акции «{action_name}» (id={action_id}). "
-        f"Регионов: {len(regions)}, адресов (uid): {len(addresses)}"
-    )
+if resp.status_code >= 400:
+    snippet = (resp.text or "")[:1500]
+    # коротко в чат
+    if "Antibot" in snippet or "enable JavaScript" in snippet:
+        await update.message.reply_text("Seller вернул антибот. Проверь OZON_COOKIE_HEADER/PROXY_URL.")
+    else:
+        await update.message.reply_text(f"Ошибка обновления акции: {resp.status_code}\n{snippet}")
+    # подробно в лог
+    logger.error("update action %s failed: %s", action_id, (resp.text or "")[:5000])
+    return
 
 
 def register_handlers(application):
