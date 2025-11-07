@@ -155,31 +155,29 @@ async def cmd_update_geo(update, context):
 
 async def cmd_update_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Обновляет географию во ВСЕХ акциях из config.py::ACTIONS.
-    Идём последовательно: так проще логировать и избегать лимитов.
+    /update_all
+      Последовательно обновляет ВСЕ акции из config.ACTIONS,
+      используя ту же логику, что и /update_geo <название>.
     """
     if not ACTIONS:
-        await update.message.reply_text("config.py::ACTIONS пуст — нечего обновлять.")
+        await update.message.reply_text("⚠️ В config.ACTIONS нет акций для обновления.")
         return
 
-    await update.message.reply_text(f"Начинаю массовое обновление: {len(ACTIONS)} акций…")
+    await update.message.reply_text(f"🔄 Начинаю массовое обновление ({len(ACTIONS)} акций)...")
 
-    ok, fail = 0, 0
-    # стабильный порядок:
-    for name in sorted(ACTIONS.keys()):
+    results = []
+    for action_name in ACTIONS.keys():
         try:
-            msg = await _update_geo_for_action_by_name(name)
-            if msg.startswith("OK"):
-                ok += 1
-            else:
-                fail += 1
-            await update.message.reply_text(f"— {name}: {msg}")
+            # искусственно подготавливаем context.args для совместимости
+            context.args = [action_name]
+            await cmd_update_geo(update, context)
+            results.append(f"✅ {action_name} — обновлена")
         except Exception as e:
-            fail += 1
-            await update.message.reply_text(f"— {name}: ошибка: {e}")
+            results.append(f"❌ {action_name} — ошибка: {e}")
 
-    await update.message.reply_text(f"Готово. Успешно: {ok}, с ошибками: {fail}.")
-
+    await update.message.reply_text(
+        "Готово.\n\n" + "\n".join(results)
+    )
 
 def register_handlers(application):
     application.add_handler(CommandHandler("update_geo", cmd_update_geo))
