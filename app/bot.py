@@ -118,6 +118,7 @@ async def cmd_update_geo(update, context):
         regions_set.update(regs)
 
     regions = sorted(regions_set, key=str.lower)
+    logger.info("🗺️ Регионы для акции %s: %s", action_name, ", ".join(regions))
     if not regions:
         await update.message.reply_text("Не найдено регионов с наличием > 0 по заданным SKU")
         return
@@ -125,12 +126,18 @@ async def cmd_update_geo(update, context):
     # 4) regions -> addresses (uid региона + uid его городов)
     geo = GeoResolver()  # читает GEO_JSON_PATH или /app/data/geo.json
     addresses = geo.regions_to_addresses(regions)
+    logger.info("📦 Адреса (UID) для акции %s: %d шт.", action_name, len(addresses))
+    for addr in addresses:
+        logger.debug("→ %s", addr)
     if not addresses:
         await update.message.reply_text("Не удалось сопоставить регионы в addresses (UID). Проверь data/geo.json")
         return
 
     logger.info(addresses)
-    
+    logger.info(
+        "🚀 Отправляю обновление акции %s (id=%s): %d адресов",
+        action_name, action_id, len(addresses)
+    )
     # 5) апдейт акции через seller.ozon.ru (куки в OzonClient)
     resp = update_action_via_proxy(
         action_id=action_id,
