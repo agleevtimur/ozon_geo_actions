@@ -362,7 +362,7 @@ def main():
             name="mass_update_job",
         )
         chat_ids = _parse_chat_ids(MASS_UPDATE_CHAT_IDS_ENV)
-        logger.info("Планировщик включён: каждые %d ч. Получатели: %s",interval,", ".join(chat_ids) or "—"
+        logger.info("Планировщик включён: каждые %d ч. Получатели: %s",interval,", ".join(chat_ids) or "—")
     else:
         logger.info("Планировщик выключен (MASS_UPDATE_ENABLED=false)")
     
