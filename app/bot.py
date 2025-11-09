@@ -27,10 +27,15 @@ logger = logging.getLogger(__name__)
 MASS_UPDATE_ENABLED = os.getenv("MASS_UPDATE_ENABLED", "false").strip().lower() in ("1", "true", "yes")
 # Интервал в часах между запусками
 MASS_UPDATE_INTERVAL_HOURS = int(os.getenv("MASS_UPDATE_INTERVAL_HOURS", "6").strip() or "6")
-# Куда присылать ошибки (chat_id администратора / ваш чат)
-MASS_UPDATE_CHAT_ID = os.getenv("MASS_UPDATE_CHAT_ID", "").strip()
 # Если хотите получать и успешные отчёты, включите:
 MASS_UPDATE_NOTIFY_OK = os.getenv("MASS_UPDATE_NOTIFY_OK", "false").strip().lower() in ("1", "true", "yes")
+MASS_UPDATE_CHAT_IDS_ENV = os.getenv("MASS_UPDATE_CHAT_IDS", "").strip()
+
+def _parse_chat_ids(env_value: str, fallback: str | None = None) -> list[str]:
+    ids = [x.strip() for x in (env_value or "").split(",") if x.strip()]
+    if not ids and fallback:
+        ids = [fallback]
+    return ids
 
 def _extract_items_from_openapi(resp: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
@@ -248,9 +253,9 @@ async def _job_mass_update(context: ContextTypes.DEFAULT_TYPE):
     Шлёт в ТГ только ошибки (и опционально успешный отчёт).
     """
     # Куда слать отчёты
-    chat_id = MASS_UPDATE_CHAT_ID or None
+    chat_ids = _parse_chat_ids(MASS_UPDATE_CHAT_IDS_ENV, fallback=None)
     if not chat_id:
-        logger.warning("MASS_UPDATE_CHAT_ID не задан — отчёты слать некуда, пишем только в логи")
+        logger.warning("MASS_UPDATE_CHAT_IDS не задан — отчёты слать некуда, пишем только в логи")
 
     action_names = list(ACTIONS.keys())
 
@@ -292,25 +297,46 @@ async def _job_mass_update(context: ContextTypes.DEFAULT_TYPE):
             logger.error("Ошибка «%s»: %s\n%s", action_name, e, tb)
             errors.append(f"❌ {action_name}: {e}")
 
-    # Отчёт в ТГ: только если есть ошибки — либо если включён флаг уведомлять об успехе
-    if chat_id:
-        if errors:
-            head = f"⚠️ Массовое обновление завершилось с ошибками ({len(errors)} шт.)."
-            text = head + "\n\n" + "\n".join(errors[:15])
-            if len(errors) > 15:
-                text += f"\n…и ещё {len(errors)-15} ошибок"
-            await context.bot.sendMessage(chat_id=chat_id, text=text)
-        elif MASS_UPDATE_NOTIFY_OK:
-            text = "✅ Массовое обновление: всё успешно.\n\n" + "\n".join(ok_list[:20])
-            if len(ok_list) > 20:
-                text += f"\n…и ещё {len(ok_list)-20} акций"
-            await context.bot.sendMessage(chat_id=chat_id, text=text)
+    chat_ids = _parse_chat_ids(MASS_UPDATE_CHAT_IDS_ENV, fallback=str(chat_id) if chat_id else None)
 
+    if errors:
+        head = f"⚠️ Массовое обновление завершилось с ошибками ({len(errors)} шт.)."
+        text = head + "\n\n" + "\n".join(errors[:15])
+        if len(errors) > 15:
+            text += f"\n…и ещё {len(errors)-15} ошибок"
+        await _notify_many(context.bot, chat_ids, text)
+    elif MASS_UPDATE_NOTIFY_OK:
+        text = "✅ Массовое обновление: всё успешно.\n\n" + "\n".join(ok_list[:20])
+        if len(ok_list) > 20:
+            text += f"\n…и ещё {len(ok_list)-20} акций"
+        await _notify_many(context.bot, chat_ids, text)
+        
     logger.info("⏱ Массовое обновление завершено: ok=%d, err=%d", len(ok_list), len(errors))
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправляет chat_id пользователю, чтобы можно было внести в MASS_UPDATE_CHAT_IDS."""
+    user = update.effective_user
+    chat = update.effective_chat
+    chat_id = chat.id if chat else None
+
+    text = (
+        f"👋 Привет, {user.first_name or 'друг'}!\n\n"
+        f"Ваш Telegram chat_id: <code>{chat_id}</code>\n\n"
+    )
+
+    await update.message.reply_html(text)
+
+async def _notify_many(bot, chat_ids: list[str], text: str) -> None:
+    for cid in chat_ids:
+        try:
+            await bot.send_message(chat_id=cid, text=text)
+        except Exception as e:
+            logger.warning("Не удалось отправить сообщение в chat_id=%s: %s", cid, e)
 
 def register_handlers(application):
     application.add_handler(CommandHandler("update_geo", cmd_update_geo))
     application.add_handler(CommandHandler("update_all", cmd_update_all))
+    application.add_handler(CommandHandler("start", cmd_start))
 
 def main():
     token = (
@@ -335,7 +361,8 @@ def main():
             first=timedelta(seconds=10),  # первый запуск через 10 сек после старта
             name="mass_update_job",
         )
-        logger.info("Планировщик включён: каждые %d ч. Получатель: %s", interval, MASS_UPDATE_CHAT_ID or "—")
+        chat_ids = _parse_chat_ids(MASS_UPDATE_CHAT_IDS_ENV)
+        logger.info("Планировщик включён: каждые %d ч. Получатели: %s",interval,", ".join(chat_ids) or "—"
     else:
         logger.info("Планировщик выключен (MASS_UPDATE_ENABLED=false)")
     
