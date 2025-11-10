@@ -254,7 +254,7 @@ async def _job_mass_update(context: ContextTypes.DEFAULT_TYPE):
     """
     # Куда слать отчёты
     chat_ids = _parse_chat_ids(MASS_UPDATE_CHAT_IDS_ENV, fallback=None)
-    if not chat_id:
+    if not chat_ids:
         logger.warning("MASS_UPDATE_CHAT_IDS не задан — отчёты слать некуда, пишем только в логи")
 
     action_names = list(ACTIONS.keys())
@@ -262,8 +262,8 @@ async def _job_mass_update(context: ContextTypes.DEFAULT_TYPE):
     if not action_names:
         msg = "Нет акций для массового обновления (проверьте MASS_UPDATE_ACTION_NAMES / config.ACTIONS)."
         logger.warning(msg)
-        if chat_id:
-            await context.bot.sendMessage(chat_id=chat_id, text=f"⚠️ {msg}")
+        if chat_ids:
+            await _notify_many(context.bot, chat_ids, text=f"⚠️ {msg}")
         return
 
     logger.info("⏱ Запуск массового обновления: %d акций", len(action_names))
