@@ -297,7 +297,7 @@ async def _job_mass_update(context: ContextTypes.DEFAULT_TYPE):
             logger.error("Ошибка «%s»: %s\n%s", action_name, e, tb)
             errors.append(f"❌ {action_name}: {e}")
 
-    chat_ids = _parse_chat_ids(MASS_UPDATE_CHAT_IDS_ENV, fallback=str(chat_id) if chat_id else None)
+    chat_ids = _parse_chat_ids(MASS_UPDATE_CHAT_IDS_ENV, fallback=None)
 
     if errors:
         head = f"⚠️ Массовое обновление завершилось с ошибками ({len(errors)} шт.)."
